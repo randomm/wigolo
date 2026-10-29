@@ -1,5 +1,7 @@
 import { mkdirSync, rmSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 // Type-only: the runtime module is dynamic-imported inside getModel() so the
 // native ONNX runtime is NOT mapped into the process at boot (D2 idle-footprint
 // contract) — a static import loads the native binding the moment any file in
@@ -75,6 +77,41 @@ export async function initModelWithArchiveRetry<T>(
  */
 export const FASTEMBED_MAX_BATCH = 8;
 
+type SessionFactory = { create: (...args: unknown[]) => Promise<unknown> };
+const THREADS_APPLIED = Symbol.for('wigolo.ortIntraOpThreads');
+
+/**
+ * Make every ORT session created through `session.create` use `threads` intra-op
+ * threads. ORT sizes its pool from the host CPU count, not a container's CPU
+ * quota: on a 32-thread host under `--cpus=4`, embedding ran ~10x slower from
+ * CFS throttling. fastembed's `init()` takes no session options, so the factory
+ * is wrapped instead. Applied once per process; returns whether it wrapped.
+ */
+export function limitOrtIntraOpThreads(session: SessionFactory, threads: number): boolean {
+  const tagged = session as SessionFactory & { [THREADS_APPLIED]?: number };
+  if (!(threads > 0) || tagged[THREADS_APPLIED] !== undefined) return false;
+  const create = session.create.bind(session);
+  session.create = (...args: unknown[]) => {
+    const last = args[args.length - 1];
+    const hasOpts = args.length > 1 && typeof last === 'object' && last !== null && !ArrayBuffer.isView(last);
+    const head = hasOpts ? args.slice(0, -1) : args;
+    return create(...head, { ...(hasOpts ? last : {}), intraOpNumThreads: threads });
+  };
+  tagged[THREADS_APPLIED] = threads;
+  return true;
+}
+
+/** Apply `limitOrtIntraOpThreads` to the onnxruntime-node instance fastembed itself loads. */
+async function applyEmbeddingThreads(threads: number): Promise<void> {
+  if (!(threads > 0)) return;
+  const req = createRequire(import.meta.resolve('fastembed'));
+  const ort = await import(pathToFileURL(req.resolve('onnxruntime-node')).href);
+  const session = (ort.InferenceSession ?? ort.default?.InferenceSession) as SessionFactory | undefined;
+  if (session && limitOrtIntraOpThreads(session, threads)) {
+    log.info('ORT intra-op threads limited', { threads });
+  }
+}
+
 /**
  * Native ONNX embedding provider using fastembed-rs Node bindings.
  *
@@ -103,7 +140,8 @@ export class FastembedEmbedProvider implements EmbedProvider {
     log.info('Loading embedding model', { modelId: this.modelId });
     const dataDir = getConfig().dataDir;
     const cacheDir = ensureFastembedCacheDir(dataDir);
-    this.modelPromise = import('fastembed')
+    this.modelPromise = applyEmbeddingThreads(getConfig().embeddingThreads)
+      .then(() => import('fastembed'))
       .then(({ FlagEmbedding, EmbeddingModel }) =>
         initModelWithArchiveRetry(
           () => FlagEmbedding.init({ model: EmbeddingModel.BGESmallENV15, cacheDir }),

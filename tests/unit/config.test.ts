@@ -356,6 +356,16 @@ describe('config', () => {
       expect(getConfig().embeddingMaxTextLength).toBe(4000);
     });
 
+    it('embeddingThreads defaults to 0 (ORT default)', () => {
+      expect(getConfig().embeddingThreads).toBe(0);
+    });
+
+    it('embeddingThreads reads from WIGOLO_EMBEDDING_THREADS', () => {
+      process.env.WIGOLO_EMBEDDING_THREADS = '4';
+      resetConfig();
+      expect(getConfig().embeddingThreads).toBe(4);
+    });
+
     it('embeddingIdleTimeoutMs falls back to default on non-numeric', () => {
       process.env.WIGOLO_EMBEDDING_IDLE_TIMEOUT = 'invalid';
       resetConfig();
