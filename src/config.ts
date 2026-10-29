@@ -150,6 +150,8 @@ export interface Config {
   embeddingModel: string;
   embeddingIdleTimeoutMs: number;
   embeddingMaxTextLength: number;
+  /** ORT intra-op threads for the embedder and reranker; 0 = ORT default (host CPU count). */
+  onnxThreads: number;
   /**
    * Base URL for an OpenAI-compatible embeddings endpoint. When set, the embed
    * factory sends `POST <base>/embeddings` and skips the on-device model.
@@ -763,6 +765,7 @@ export function getConfig(): Config {
     embeddingApiBase: envStr('WIGOLO_EMBEDDING_API_BASE', null, settings, 'embeddingApiBase'),
     embeddingApiKey: resolveKeychainSecret('WIGOLO_EMBEDDING_API_KEY', 'embeddingApiKey'),
     embeddingRequestTimeoutMs: envPositiveInt('WIGOLO_EMBEDDING_REQUEST_TIMEOUT_MS', 30_000, settings, 'embeddingRequestTimeoutMs'),
+    onnxThreads: envInt('WIGOLO_ONNX_THREADS', 0, settings, 'onnxThreads'),
     searchBackend: envStr('WIGOLO_SEARCH', null, settings, 'searchBackend'),
     llmProvider: envStr('WIGOLO_LLM_PROVIDER', null, settings, 'llmProvider'),
     llmBaseUrl: envStr('WIGOLO_LLM_BASE_URL', null, settings, 'llmBaseUrl'),
