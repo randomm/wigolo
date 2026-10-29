@@ -1,6 +1,10 @@
 import { chromium, type Browser, type BrowserContext } from 'playwright';
 import { existsSync } from 'node:fs';
 import { createLogger } from '../logger.js';
+import { getConfig } from '../config.js'; // halo: egress-proxy-ssrf
+import { sanitizedChildEnv } from '../util/child-env.js'; // halo: egress-proxy-ssrf
+import { egressBrowserLaunchHardening, egressDelegationRequested, egressMode, egressMisconfiguredMessage, squidErrorRefusal } from './egress-proxy.js'; // halo: egress-proxy-ssrf
+import { playwrightProxyOption } from './proxy-credentials.js'; // halo: egress-proxy-ssrf
 import { abortRejection } from '../util/abort.js';
 import { settlePage, POST_GOTO_CAP_MS } from './settle.js';
 import type { ContentCompleteness } from '../types.js';
@@ -44,7 +48,16 @@ export async function getDaemonBrowser(): Promise<{ browser: Browser; context: B
         err.hint = status.hint;
         throw err;
       }
-      const browser = await chromium.launch({ headless: true });
+      // halo: egress-proxy-ssrf — delegated: the daemon browser egresses through the proxy (structured
+      // option, proxy env stripped so credentials stay out of the child, WebRTC UDP held off the
+      // network). Strict: upstream launch.
+      const egress = egressMode();
+      if (egress.kind === 'misconfigured') throw new Error(egressMisconfiguredMessage(egress));
+      const cfg = getConfig();
+      const browser = await chromium.launch(egress.kind === 'delegated' // halo: egress-proxy-ssrf
+        // non-null: egressMode() only reports delegated when this option is defined
+        ? { headless: true, env: sanitizedChildEnv({ stripProxy: true }), proxy: playwrightProxyOption(cfg.proxyUrl, cfg.useProxy)!, ...egressBrowserLaunchHardening('chromium') }
+        : { headless: true });
       const context = await browser.newContext();
       _browser = browser;
       _ctx = context;
@@ -79,10 +92,15 @@ export async function fetchWithPlaywright(url: string, opts: { timeoutMs?: numbe
     const overall = opts.timeoutMs ?? 30000;
     // Race the navigation against the caller's abort signal.
     // abortRejection never settles when no signal is given (safe loser in race).
-    await Promise.race([
+    const response = await Promise.race([ // halo: egress-proxy-ssrf — response kept for the refusal check
       page.goto(url, { waitUntil: 'load', timeout: overall }),
       abortRejection(opts.signal),
     ]);
+    // halo: egress-proxy-ssrf — squid's error page for an http:// navigation is a refusal, never content.
+    if (response && egressDelegationRequested()) { // halo: egress-proxy-ssrf
+      const refused = squidErrorRefusal(response.url(), response.status(), response.headers()['x-squid-error']); // halo: egress-proxy-ssrf
+      if (refused) throw new Error(`egress proxy refused ${new URL(response.url()).host} (proxy status ${refused.status}, ${refused.detail})`); // halo: egress-proxy-ssrf
+    } // halo: egress-proxy-ssrf
     // A fast load can win its race while the budget is already exhausted —
     // bail before entering the post-goto waits so a never-idling SPA can't
     // hold the slot past the budget.
