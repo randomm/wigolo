@@ -72,6 +72,13 @@ export async function initModelWithArchiveRetry<T>(
 export const FASTEMBED_EMBED_MODEL_ID = 'BGE-small-en-v1.5';
 
 /**
+ * Texts per ONNX run. Activation memory grows with batch x seqLen^2 and the ORT
+ * CPU arena keeps its peak for the life of the session, so one run over every
+ * input (find_similar, context-rank) ratchets RSS up for good.
+ */
+export const FASTEMBED_MAX_BATCH = 8;
+
+/**
  * Native ONNX embedding provider using fastembed-rs Node bindings.
  *
  * Model: BGE-small-en-v1.5 (384-dim). First call to `warmup()` downloads
@@ -202,7 +209,10 @@ export class FastembedEmbedProvider implements EmbedProvider {
       const cap = this.maxTextLength;
       const inputs = cap > 0 ? texts.map((t) => (t.length > cap ? t.slice(0, cap) : t)) : texts;
       const out: Float32Array[] = [];
-      for await (const batch of model.embed(inputs, inputs.length)) {
+      // halo: embed-batch-cap — ORT builds one arena sized to the whole batch;
+      // inputs.length means a single batch of everything, which unbounded input
+      // lists turn into OOM kills. Cap the batch like the reranker patch does.
+      for await (const batch of model.embed(inputs, Math.min(inputs.length, FASTEMBED_MAX_BATCH))) {
         for (const vec of batch) {
           out.push(Float32Array.from(vec));
         }
