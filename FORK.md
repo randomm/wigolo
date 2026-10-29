@@ -2,22 +2,45 @@
 
 Our fork: `randomm/wigolo` · upstream: `KnockOutEZ/wigolo` · license: AGPL-3.0 (+ commercial dual).
 
-**Branch model**
+**Branch model (decided 2026-10-31)**
 
-- `main` — pure upstream mirror. Never commit here. Fast-forward:
-  `git fetch upstream && git checkout main && git merge --ff-only upstream/main`
-- `fix/*` — our divergences, rebased onto current `main`:
-  `git checkout fix/... && git rebase main`
-- One-time setup: `git remote add upstream https://github.com/KnockOutEZ/wigolo`
+- `main` — our build: upstream + our commits on top. Everything we run and
+  install comes from here.
+- Upstream sync ritual:
+  ```bash
+  git fetch upstream
+  git rebase upstream/main          # replays our commits onto latest upstream
+  npx vitest run tests/unit/search/engines tests/unit/search/core tests/unit/embedding tests/unit/fetch
+  npm run build && npm install -g .
+  launchctl kickstart -k gui/$(id -u)/com.trailopeners.wigolo
+  git push --force-with-lease origin main
+  ```
+  Rebase rewrites our commit SHAs — expected on a personal fork. If a rebase
+  breaks, the pre-sync state is one `git rebase --abort` away; tag before
+  syncing when unsure: `git tag pre-sync-$(date +%F)`.
+- `fix/*` — scratch branches while a fix is in flight; land on `main`, delete.
 
 **Contribution posture:** upstream `CONTRIBUTING.md` auto-applies a CLA granting
 the maintainer an irrevocable right to relicense any PR contribution for their
 commercial offering. Default = keep fixes here, file upstream *issues* with
 repros only. PRs require an explicit human decision each time.
 
-## Divergences
+## Divergences (all on `main`)
 
-### branch `fix/bing-soft-block-thin-pool-gate` (2026-10-31, commit `93d7485`)
+### ORT resource + egress-proxy hardening (from `halo/v0.3.1`, cherry-picked 2026-10-31)
+
+| File area | Change | Why | Merge-conflict risk |
+|---|---|---|---|
+| `src/util/onnx-threads.ts` + `src/config.ts` | `WIGOLO_ONNX_THREADS` caps ORT intra-op pool (embedder + reranker) | ORT sizes pool from host CPUs, ignores container CFS quota: 32-thread host + `--cpus=4` → embedding 37s vs 3.7s, rerank 99s vs 11s, event-loop starvation → fetch timeouts | low |
+| `src/embedding/fastembed-provider.ts` | fastembed batch cap; threads applied before model load | ORT memory arena stays bounded | medium — upstream touches idle-unload/generation logic here (conflict resolved once already) |
+| `src/search/reranker/transformers-rerank-provider.ts` | score in batches | bounded ORT arena | low |
+| `src/fetch/*` (3 commits) | opt-in egress proxy: resolved-IP SSRF enforcement delegated to proxy; TLS tier + PDF probe routed via it; daemon Playwright launched through it; direct browser egress refused | safe egress for self-hosted agents | medium — fetch is an active upstream area |
+
+`halo/v0.2.1` was checked: its commits are earlier twins of the above
+(the `amend!` commit only deleted pre-v0.3.1 code we never had) and the #630
+pre-aborted-signal guard is already upstream. Nothing lost from that branch.
+
+### bing bait-SERP guard + thin_pool gate (commit `93d74858`)
 
 | File | Change | Why | Merge-conflict risk |
 |---|---|---|---|
