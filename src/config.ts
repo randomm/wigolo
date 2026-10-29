@@ -117,8 +117,8 @@ export interface Config {
   embeddingModel: string;
   embeddingIdleTimeoutMs: number;
   embeddingMaxTextLength: number;
-  /** ORT intra-op threads for the embedder; 0 = ORT default (host CPU count). */
-  embeddingThreads: number;
+  /** ORT intra-op threads for the embedder and reranker; 0 = ORT default (host CPU count). */
+  onnxThreads: number;
   /**
    * Search backend selector. Resolves `WIGOLO_SEARCH` env > persisted
    * `searchBackend` in config.json > built-in default (null = 'core').
@@ -419,7 +419,7 @@ export function getConfig(): Config {
     embeddingModel: envStr('WIGOLO_EMBEDDING_MODEL', 'BAAI/bge-small-en-v1.5', settings, 'embeddingModel') ?? 'BAAI/bge-small-en-v1.5',
     embeddingIdleTimeoutMs: envInt('WIGOLO_EMBEDDING_IDLE_TIMEOUT', 1800000, settings, 'embeddingIdleTimeoutMs'),
     embeddingMaxTextLength: envInt('WIGOLO_EMBEDDING_MAX_TEXT_LENGTH', 8000, settings, 'embeddingMaxTextLength'),
-    embeddingThreads: envInt('WIGOLO_EMBEDDING_THREADS', 0, settings, 'embeddingThreads'),
+    onnxThreads: envInt('WIGOLO_ONNX_THREADS', 0, settings, 'onnxThreads'),
     searchBackend: envStr('WIGOLO_SEARCH', null, settings, 'searchBackend'),
     llmProvider: envStr('WIGOLO_LLM_PROVIDER', null, settings, 'llmProvider'),
     llmBaseUrl: envStr('WIGOLO_LLM_BASE_URL', null, settings, 'llmBaseUrl'),

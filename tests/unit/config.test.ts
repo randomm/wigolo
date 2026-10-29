@@ -356,14 +356,14 @@ describe('config', () => {
       expect(getConfig().embeddingMaxTextLength).toBe(4000);
     });
 
-    it('embeddingThreads defaults to 0 (ORT default)', () => {
-      expect(getConfig().embeddingThreads).toBe(0);
+    it('onnxThreads defaults to 0 (ORT default)', () => {
+      expect(getConfig().onnxThreads).toBe(0);
     });
 
-    it('embeddingThreads reads from WIGOLO_EMBEDDING_THREADS', () => {
-      process.env.WIGOLO_EMBEDDING_THREADS = '4';
+    it('onnxThreads reads from WIGOLO_ONNX_THREADS', () => {
+      process.env.WIGOLO_ONNX_THREADS = '4';
       resetConfig();
-      expect(getConfig().embeddingThreads).toBe(4);
+      expect(getConfig().onnxThreads).toBe(4);
     });
 
     it('embeddingIdleTimeoutMs falls back to default on non-numeric', () => {

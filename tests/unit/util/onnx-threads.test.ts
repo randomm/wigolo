@@ -4,7 +4,7 @@ vi.mock('../../../src/logger.js', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 
-import { limitOrtIntraOpThreads } from '../../../src/embedding/fastembed-provider.js';
+import { limitOrtIntraOpThreads } from '../../../src/util/onnx-threads.js';
 
 function fakeSession() {
   const calls: unknown[][] = [];
