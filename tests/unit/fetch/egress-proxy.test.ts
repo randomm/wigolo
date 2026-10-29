@@ -37,6 +37,8 @@ function cfgWith(over: Partial<Config> = {}): Config {
     cdpDirect: 'off',
     cdpUrl: null,
     scrapingBrowserWss: null,
+    solverUrl: null,
+    hostedReaderUrl: null,
     ...over,
   };
 }
@@ -113,9 +115,11 @@ describe('egressMode — activation', () => {
   });
 
   const advisories: Array<[string, Partial<Config>, Record<string, string | undefined>, RegExp]> = [
-    ['cdpDirect auto', { cdpDirect: 'auto' }, {}, /CDP_DIRECT/],
+    ['cdpDirect auto', { cdpDirect: 'auto' }, {}, /CDP_DIRECT.*skipped/],
     ['cdpUrl set', { cdpUrl: 'http://127.0.0.1:9222' }, {}, /CDP_URL/],
     ['scrapingBrowserWss set', { scrapingBrowserWss: 'wss://u:secretpw@sb.example:9222' }, {}, /SCRAPING_BROWSER_WSS/],
+    ['solverUrl set', { solverUrl: 'http://u:secretpw@solver:8191/v1' }, {}, /SOLVER_URL.*skipped/],
+    ['hostedReaderUrl set', { hostedReaderUrl: 'https://reader.example/' }, {}, /HOSTED_READER_URL.*skipped/],
     ['fetchAllowPrivate', { fetchAllowPrivate: true }, {}, /ALLOW_PRIVATE/],
     ['NODE_USE_ENV_PROXY unset', {}, { NODE_USE_ENV_PROXY: undefined }, /NODE_USE_ENV_PROXY/],
     ['HTTPS_PROXY origin differs', {}, { HTTPS_PROXY: 'http://other:3128' }, /HTTP\(S\)_PROXY/],

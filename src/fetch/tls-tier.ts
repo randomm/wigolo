@@ -19,6 +19,7 @@ import { createLogger } from '../logger.js';
 import { anySignal } from '../util/abort.js';
 import { guardFetchUrl, guardResolvedHost } from '../watch/ssrf.js';
 import { readCapped } from './read-capped.js';
+import { egressMode, egressMisconfiguredMessage } from './egress-proxy.js'; // halo: egress-proxy-ssrf
 
 const log = createLogger('fetch');
 
@@ -73,6 +74,7 @@ interface WreqFetchInit {
   browser?: string;
   signal?: AbortSignal;
   redirect?: 'follow' | 'manual' | 'error';
+  proxy?: string; // halo: egress-proxy-ssrf — wreq-js per-request proxy; never logged (may carry credentials)
 }
 
 type WreqFetch = (url: string, init?: WreqFetchInit) => Promise<WreqResponse>;
@@ -308,6 +310,10 @@ export async function tlsFetch(url: string, options: TlsFetchOptions = {}): Prom
   // follow hops ourselves (redirect:'manual') and re-guard every resolved
   // Location under the same policy the input URL got.
   const guardedBackendFetch = async (browser: string): Promise<WreqResponse> => {
+    // halo: egress-proxy-ssrf — delegated mode hands wreq the proxy explicitly on every hop (IP
+    // literals included) so its env / NO_PROXY handling can never send a hop direct.
+    const egress = egressMode();
+    if (egress.kind === 'misconfigured') throw new Error(egressMisconfiguredMessage(egress));
     let current = url;
     const seen = new Set<string>();
     for (let hop = 0; hop <= maxHops; hop++) {
@@ -340,7 +346,15 @@ export async function tlsFetch(url: string, options: TlsFetchOptions = {}): Prom
         browser,
         signal,
         redirect: 'manual',
+        ...(egress.kind === 'delegated' ? { proxy: egress.proxyUrl } : {}), // halo: egress-proxy-ssrf
       });
+      // halo: egress-proxy-ssrf — a squid error page is a refusal, never content or a redirect.
+      // Only an http:// hop can carry a proxy-authored header (https bytes come through the tunnel).
+      if (egress.kind === 'delegated' && new URL(current).protocol === 'http:') {
+        if (headersToRecord(resp.headers)['x-squid-error']) {
+          throw new Error(`egress proxy refused ${new URL(current).host} (proxy status ${resp.status})`);
+        }
+      }
       if (resp.status >= 300 && resp.status < 400) {
         const loc = headersToRecord(resp.headers)['location'];
         if (!loc) return resp;
