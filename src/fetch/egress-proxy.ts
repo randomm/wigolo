@@ -282,7 +282,13 @@ function announce(m: EgressMode, cfg: Config, env: Env, log: Logger): void {
     log.warn('egress: HTTP(S)_PROXY does not match PROXY_URL; global-fetch side paths may use another route');
   }
   if (cfg.cdpDirect !== 'off') {
-    log.warn('egress: WIGOLO_CDP_DIRECT is on; cdp-direct browser egress is not covered by the proxy');
+    log.warn('egress: WIGOLO_CDP_DIRECT is on; the cdp-direct rung is skipped under delegation');
+  }
+  if (cfg.solverUrl != null) {
+    log.warn('egress: WIGOLO_SOLVER_URL is set; the challenge-solver rung is skipped under delegation');
+  }
+  if (cfg.hostedReaderUrl != null) {
+    log.warn('egress: WIGOLO_HOSTED_READER_URL is set; the hosted-reader rung is skipped under delegation');
   }
   if (cfg.cdpUrl != null) {
     log.warn('egress: WIGOLO_CDP_URL is set; the remote browser egresses outside the proxy');

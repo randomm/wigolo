@@ -44,6 +44,7 @@ import { classifyChallenge } from './challenge-classify.js';
 import { BrowserAcquirer, BROWSER_INSTALLING_NOTE, BROWSER_UNAVAILABLE_ERROR } from './browser-acquire.js';
 import { anySignal } from '../util/abort.js';
 import { guardFetchUrl, guardResolvedHost } from '../watch/ssrf.js';
+import { egressDelegationRequested, egressFetchInit, egressMode, isEgressPolicyError, proxyRefusal } from './egress-proxy.js'; // halo: egress-proxy-ssrf
 import {
   isRedditUrl,
   fetchViaRedditApi,
@@ -322,6 +323,10 @@ export async function defaultPdfProbe(url: string, signal?: AbortSignal): Promis
     target: string,
     init: { method: string; headers?: Record<string, string> },
   ): Promise<Response | null> => {
+    // halo: egress-proxy-ssrf — probe failure is non-fatal by contract; the main fetch then fails
+    // closed on a misconfigured delegation. Delegated: the probe uses the same explicit proxy.
+    const egress = egressMode();
+    if (egress.kind === 'misconfigured') return null;
     let current = target;
     const seen = new Set<string>();
     for (let hop = 0; hop <= maxHops; hop++) {
@@ -342,7 +347,11 @@ export async function defaultPdfProbe(url: string, signal?: AbortSignal): Promis
           if (!resolved.ok) return null;
         }
       }
-      const resp = await fetch(current, { ...init, redirect: 'manual', signal: combined.signal });
+      const resp = await fetch(current, { ...init, redirect: 'manual', signal: combined.signal, ...egressFetchInit(egress) } as RequestInit); // halo: egress-proxy-ssrf
+      if (egress.kind === 'delegated' && proxyRefusal(resp, current)) { // halo: egress-proxy-ssrf
+        try { await resp.arrayBuffer(); } catch { /* drain */ }
+        return null;
+      }
       if (resp.status >= 300 && resp.status < 400) {
         const loc = resp.headers.get('location');
         if (!loc) return resp;
@@ -808,6 +817,7 @@ export class SmartRouter {
   ): Promise<RawFetchResult | null> {
     const cfg = getConfig();
     if (
+      egressDelegationRequested() || // halo: egress-proxy-ssrf — no direct-egress retry may coexist with delegation
       !this.browserPool ||
       browserOptions.forceNoProxy ||
       !cfg.proxyBypassOnChallenge ||
@@ -846,6 +856,9 @@ export class SmartRouter {
   ): Promise<RawFetchResult | null> {
     const cfg = getConfig();
     if (!cfg.solverUrl && !cfg.hostedReaderUrl) return null;
+    // halo: egress-proxy-ssrf — both rungs fetch the target outside the proxy with their own resolver,
+    // and the local resolved-IP guard passes a name the container cannot resolve.
+    if (egressDelegationRequested()) return null; // halo: egress-proxy-ssrf
 
     const fetchers =
       this.escapeHatchOverride ?? (await import('./escape-hatch.js'));
@@ -1401,6 +1414,9 @@ export class SmartRouter {
       // future branch reaches here with one.
       return this.guardChallengeShell(this.toRawFetchResult(result));
     } catch (err) {
+      // halo: egress-proxy-ssrf — a proxy refusal is a policy answer, not a flaky host: it must not
+      // count toward browser escalation or mark the domain preferPlaywright.
+      if (isEgressPolicyError(err)) throw err;
       stats.failureCount++;
       logger.warn('http fetch failed', {
         url,
