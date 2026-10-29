@@ -9,6 +9,7 @@ import { probeHealth } from './health-check.js';
 import { getConfig } from '../config.js';
 import { searxngConfigured } from '../searxng/enabled.js';
 import { createLogger } from '../logger.js';
+import { announceEgressMode } from '../fetch/egress-proxy.js'; // halo: egress-proxy-ssrf
 import { ensureAdminToken, readAdminToken, tokenMatches } from './admin-token.js';
 import { resetBreakers, getBreakerSnapshot } from '../search/core/engine-base.js';
 import { resolveApiToken } from './rest/auth.js';
@@ -193,6 +194,7 @@ export class DaemonHttpServer {
         }
         const url = `http://${this.host}:${resolvedPort}`;
         log.info('Daemon HTTP server started', { url });
+        announceEgressMode(log); // halo: egress-proxy-ssrf — surfaces a misconfigured delegation at boot
         resolve(url);
       });
     });
