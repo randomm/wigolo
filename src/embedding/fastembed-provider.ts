@@ -8,6 +8,7 @@ import type { FlagEmbedding } from 'fastembed';
 import type { EmbedProvider } from '../providers/embed-provider.js';
 import { getConfig } from '../config.js';
 import { createLogger } from '../logger.js';
+import { applyOnnxThreads } from '../util/onnx-threads.js';
 
 const log = createLogger('embedding');
 
@@ -123,7 +124,8 @@ export class FastembedEmbedProvider implements EmbedProvider {
     const dataDir = getConfig().dataDir;
     const cacheDir = ensureFastembedCacheDir(dataDir);
     const generation = this.loadGeneration;
-    const promise = import('fastembed')
+    const promise = applyOnnxThreads(getConfig().onnxThreads)
+      .then(() => import('fastembed'))
       .then(({ FlagEmbedding, EmbeddingModel }) =>
         initModelWithArchiveRetry(
           () => FlagEmbedding.init({ model: EmbeddingModel.BGESmallENV15, cacheDir }),

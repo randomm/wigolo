@@ -11,6 +11,7 @@ import type {
 } from '../../providers/rerank-provider.js';
 import { createLogger } from '../../logger.js';
 import { getConfig } from '../../config.js';
+import { applyOnnxThreads } from '../../util/onnx-threads.js';
 
 const log = createLogger('reranker');
 
@@ -74,10 +75,11 @@ export class TransformersRerankProvider implements RerankProvider {
     // models don't end up in a user home cache the daemon can't manage.
     env.cacheDir = cacheDir;
 
-    this.loadPromise = Promise.all([
-      AutoTokenizer.from_pretrained(this.modelId),
-      AutoModelForSequenceClassification.from_pretrained(this.modelId),
-    ])
+    this.loadPromise = applyOnnxThreads(getConfig().onnxThreads)
+      .then(() => Promise.all([
+        AutoTokenizer.from_pretrained(this.modelId),
+        AutoModelForSequenceClassification.from_pretrained(this.modelId),
+      ]))
       .then(([tokenizer, model]) => {
         this.tokenizer = tokenizer;
         this.model = model;
