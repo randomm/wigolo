@@ -48,6 +48,14 @@ function wrapLoadError(err: unknown): Error {
   return new Error(`Failed to load reranker model: ${message}`);
 }
 
+/**
+ * (query, document) pairs per ONNX run. Activations grow with batch x seqLen^2
+ * and the ORT CPU arena keeps its peak: highlights scoring sends every passage of
+ * every result at once (120 passages of ~512 tokens: 4.1 GB RSS retained, vs
+ * 0.6 GB in runs of 8).
+ */
+export const RERANK_MAX_BATCH = 8;
+
 export class TransformersRerankProvider implements RerankProvider {
   private tokenizer: Tokenizer | null = null;
   private model: Model | null = null;
@@ -100,28 +108,25 @@ export class TransformersRerankProvider implements RerankProvider {
 
     const { tokenizer, model } = await this.load();
 
-    // Build batch: query repeated against each document.
-    const queries = candidates.map(() => query);
-    const docs = candidates.map((c) => c.text);
+    const scored: RerankResult[] = [];
+    for (let start = 0; start < candidates.length; start += RERANK_MAX_BATCH) {
+      const batch = candidates.slice(start, start + RERANK_MAX_BATCH);
+      // Build batch: query repeated against each document.
+      const inputs = tokenizer(batch.map(() => query), {
+        text_pair: batch.map((c) => c.text),
+        padding: true,
+        truncation: true,
+      });
 
-    const inputs = tokenizer(queries, {
-      text_pair: docs,
-      padding: true,
-      truncation: true,
-    });
-
-    const outputs = (await model(inputs)) as { logits: LogitsTensor };
-    const logits = outputs.logits;
-    // logits shape is [batch, 1] for single-label regression rerankers.
-    // For multi-label heads (rare for rerankers) we still take the first
-    // value as the relevance score.
-    const stride = logits.dims.length >= 2 ? logits.dims[1] : 1;
-    const data = logits.data;
-
-    const scored: RerankResult[] = candidates.map((c, i) => ({
-      id: c.id,
-      score: Number(data[i * stride]),
-    }));
+      const outputs = (await model(inputs)) as { logits: LogitsTensor };
+      const logits = outputs.logits;
+      // logits shape is [batch, 1] for single-label regression rerankers.
+      // For multi-label heads (rare for rerankers) we still take the first
+      // value as the relevance score.
+      const stride = logits.dims.length >= 2 ? logits.dims[1] : 1;
+      const data = logits.data;
+      batch.forEach((c, i) => scored.push({ id: c.id, score: Number(data[i * stride]) }));
+    }
 
     return scored.sort((a, b) => b.score - a.score).slice(0, topK);
   }
