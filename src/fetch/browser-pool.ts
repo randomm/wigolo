@@ -10,6 +10,7 @@ import { DOM_VERDICT_SOURCE, type DomVerdict } from './hydration-probe.js';
 import type { ContentCompleteness } from '../types.js';
 import { sanitizedChildEnv } from '../util/child-env.js';
 import { playwrightProxyOption } from './proxy-credentials.js';
+import { egressBrowserLaunchHardening, egressDelegationRequested, egressMode, squidErrorRefusal } from './egress-proxy.js'; // halo: egress-proxy-ssrf
 import { redactUrl } from '../util/redact-url.js';
 import { isAntiBotStatus, hasBrowserChallengeBody, isChallengeShell, isChallengeResponse, stillShowingChallenge, hasChallengeHeader, isNearEmptyBody } from './tls-tier.js';
 import { pollUntilCleared, type ClearanceCookie } from './challenge-completion.js';
@@ -372,11 +373,14 @@ export class MultiBrowserPool {
       const launcher = getLauncher(type);
       const cfg = getConfig();
       const proxy = playwrightProxyOption(cfg.proxyUrl, cfg.useProxy);
+      if (egressDelegationRequested() && (egressMode().kind !== 'delegated' || !proxy)) throw new Error('egress proxy delegation requested but browser proxy unavailable; refusing direct launch'); // halo: egress-proxy-ssrf
+      const hardening = egressDelegationRequested() ? egressBrowserLaunchHardening(type) : {}; // halo: egress-proxy-ssrf — WebRTC UDP off the network
       log.debug('launching browser', { type, proxied: proxy !== undefined });
       typePool.browser = await launcher.launch({
         headless: true,
         env: sanitizedChildEnv({ stripProxy: true }),
         ...(proxy ? { proxy } : {}),
+        ...hardening, // halo: egress-proxy-ssrf
       });
     }
     return typePool.browser;
@@ -527,15 +531,18 @@ export class MultiBrowserPool {
     // A managed-challenge direct-retry forces a proxy-free launch even when a
     // proxy is configured (a datacenter proxy blocks many managed challenges).
     const proxy = forceNoProxy ? undefined : playwrightProxyOption(cfg.proxyUrl, cfg.useProxy);
+    if (egressDelegationRequested() && (forceNoProxy || !proxy || egressMode().kind !== 'delegated')) throw new Error('direct-egress browser launch refused: egress proxy delegation is requested'); // halo: egress-proxy-ssrf
     // headless:false = a real visible window (opt-in). Default headless:true is
     // the engine's windowless new headless — headful-grade fingerprint, no
     // window ever pops for a background server.
     const headless = !cfg.browserHeadful;
+    const hardening = egressDelegationRequested() ? egressBrowserLaunchHardening(type) : {}; // halo: egress-proxy-ssrf — WebRTC UDP off the network
     const baseOpts = {
       headless,
-      args: stealthLaunchArgs(type),
+      args: [...stealthLaunchArgs(type), ...(hardening.args ?? [])], // halo: egress-proxy-ssrf
       env: sanitizedChildEnv({ stripProxy: true }),
       ...(proxy ? { proxy } : {}),
+      ...(hardening.firefoxUserPrefs ? { firefoxUserPrefs: hardening.firefoxUserPrefs } : {}), // halo: egress-proxy-ssrf
     };
 
     /**
@@ -616,7 +623,9 @@ export class MultiBrowserPool {
     // abort) fall through to the normal browser tier UNCHANGED. The rung makes no
     // claim to beat the existing stealth/patchright tier — it is a live-evaluation
     // escalation only, and never hard-fails a fetch.
-    if (config.cdpDirect !== 'off') {
+    // halo: egress-proxy-ssrf — skipped while delegation is requested: the rung's Chrome gets no
+    // proxy when USE_PROXY/PROXY_URL are unset, and none of the delegated launch hardening.
+    if (config.cdpDirect !== 'off' && !egressDelegationRequested()) { // halo: egress-proxy-ssrf
       const contentOnly =
         !options.actions?.length &&
         !options.cdpUrl &&
@@ -903,6 +912,10 @@ export class MultiBrowserPool {
           const rawHeaders = response.headers();
           responseHeaders = rawHeaders;
           contentType = rawHeaders['content-type'] ?? '';
+          // halo: egress-proxy-ssrf — squid's error page for an http:// navigation is a refusal, never
+          // content (the HTTP tier refuses the same answer).
+          const refused = egressDelegationRequested() ? squidErrorRefusal(finalUrl, statusCode, rawHeaders['x-squid-error']) : null;
+          if (refused) throw new Error(`egress proxy refused ${new URL(finalUrl).host} (proxy status ${refused.status}, ${refused.detail})`); // halo: egress-proxy-ssrf
         }
       } catch (err) {
         // A PDF (or other binary) response makes Chromium reject goto with
