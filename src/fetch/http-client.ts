@@ -3,6 +3,7 @@ import { createLogger } from '../logger.js';
 import { anySignal } from '../util/abort.js';
 import { guardFetchUrl, guardResolvedHost } from '../watch/ssrf.js';
 import { createPinnedAgent } from './pinned-dispatcher.js';
+import { egressMode, egressMisconfiguredMessage, egressProxyDispatcher, proxyRefusal } from './egress-proxy.js'; // halo: egress-proxy-ssrf
 import type { Agent } from 'undici';
 
 export interface HttpFetchOptions {
@@ -169,12 +170,20 @@ async function fetchWithRedirects(
   // once the body has been consumed. An Agent left open is a socket leak, and the body is read
   // inside this function, so closing on the way out is safe.
   const agents: Agent[] = [];
+  // halo: egress-proxy-ssrf — one egress decision per call. A misconfigured delegation refuses
+  // before any DNS lookup or socket. The shared ProxyAgent is NEVER pushed into `agents`: the
+  // finally destroys those, and destroying the shared one would abort other requests. It is looked
+  // up per hop, because the shared agent may be retired between hops.
+  const egress = egressMode();
+  if (egress.kind === 'misconfigured') throw new HttpFetchError(egressMisconfiguredMessage(egress), false);
+  const proxied = egress.kind === 'delegated';
 
   try {
   while (true) {
     // Per HOP, not per request: an IP-literal hop takes no pin, and leaving the previous hop's
     // Agent in scope would send that request through a dispatcher built for a different host.
     let pinnedAgent: Agent | undefined;
+    let hopIsIpLiteral = false; // halo: egress-proxy-ssrf
     if (visited.has(currentUrl)) {
       throw new HttpFetchError(`Redirect loop detected at ${currentUrl}`, false);
     }
@@ -190,6 +199,7 @@ async function fetchWithRedirects(
     {
       const rhost = new URL(currentUrl).hostname;
       const isIpLiteral = /^\d{1,3}(\.\d{1,3}){3}$/.test(rhost) || rhost.includes(':');
+      hopIsIpLiteral = isIpLiteral; // halo: egress-proxy-ssrf
       if (!isIpLiteral) {
         const resolved = await guardResolvedHost(rhost, 'target url', {
           allowPrivate,
@@ -206,7 +216,10 @@ async function fetchWithRedirects(
         //
         // Not retryable: DNS failures never were (EAI_AGAIN/ENOTFOUND aren't in the retry set),
         // and dead hostnames are common at crawl scale, so retrying would only add backoff.
-        if (!resolved.addresses?.length) {
+        //
+        // halo: egress-proxy-ssrf — when the hop goes through the delegated egress proxy there is
+        // no second local lookup to race: the proxy resolves once and connects to what it checked.
+        if (!proxied && !resolved.addresses?.length) { // halo: egress-proxy-ssrf
           throw new HttpFetchError(
             `Could not resolve ${rhost} to a validated address; refusing to connect without pinning`,
             false,
@@ -217,10 +230,21 @@ async function fetchWithRedirects(
         // the check above and a private one for the connect (DNS rebinding). Pinning removes the
         // second resolution, so there is no window to race. Literal IPs need no pinning — there
         // is no name to re-resolve.
-        pinnedAgent = createPinnedAgent(rhost, resolved.addresses);
+        // halo: egress-proxy-ssrf — the proxy replaces the pin (the two dispatchers cannot stack).
+        if (!proxied) { // halo: egress-proxy-ssrf
+        pinnedAgent = createPinnedAgent(rhost, resolved.addresses!); // halo: egress-proxy-ssrf (non-null: checked above)
         agents.push(pinnedAgent);
+        } // halo: egress-proxy-ssrf
       }
     }
+    // halo: egress-proxy-ssrf — invariant: a hostname hop is pinned or proxied, never neither.
+    // Catches a rebase that drops one of the branches above.
+    if (!hopIsIpLiteral && !pinnedAgent && !proxied) {
+      throw new HttpFetchError('internal: unpinned, unproxied hostname hop refused', false);
+    }
+    // halo: egress-proxy-ssrf — delegated mode proxies IP-literal hops too, so NO_PROXY can never
+    // send a loopback literal direct.
+    const dispatcher = egress.kind === 'delegated' ? egressProxyDispatcher(egress) : pinnedAgent; // halo: egress-proxy-ssrf
 
     const timeout = AbortSignal.timeout(timeoutMs);
     const combined = options.signal
@@ -255,15 +279,36 @@ async function fetchWithRedirects(
         signal,
         // `dispatcher` is undici's extension to RequestInit; Node's global fetch honours it but
         // the DOM typings do not declare it, hence the cast.
-        ...(pinnedAgent ? ({ dispatcher: pinnedAgent } as Record<string, unknown>) : {}),
+        ...(dispatcher ? ({ dispatcher } as Record<string, unknown>) : {}), // halo: egress-proxy-ssrf
       });
     } catch (err) {
+      // halo: egress-proxy-ssrf — a refused CONNECT / 407 is a policy answer, not a flaky network.
+      if (proxied) {
+        const r = proxyRefusal(err, currentUrl);
+        if (r) {
+          throw new HttpFetchError(
+            `egress proxy refused ${new URL(currentUrl).host} (proxy status ${r.status}, ${r.detail}); resolved-IP SSRF policy is enforced by the proxy`,
+            false,
+          );
+        }
+      }
       const isTimeout = err instanceof Error && err.name === 'TimeoutError';
       const isConnErr = err instanceof Error && RETRYABLE_ERROR_CODES.has((err as NodeJS.ErrnoException).code ?? '');
       const retryable = isTimeout || isConnErr;
       throw Object.assign(err instanceof Error ? err : new Error(String(err)), { retryable });
     } finally {
       combined.cleanup();
+    }
+
+    // halo: egress-proxy-ssrf — BEFORE the 304 / redirect / RETRYABLE_STATUSES branches, so a squid
+    // 403/503 page is never returned as content, followed as a redirect, or retried (503 is in
+    // RETRYABLE_STATUSES).
+    if (proxied) {
+      const r = proxyRefusal(response, currentUrl);
+      if (r) {
+        try { await response.body?.cancel(); } catch { /* already closed */ }
+        throw new HttpFetchError(`egress proxy refused ${new URL(currentUrl).host} (proxy status ${r.status}, ${r.detail})`, false);
+      }
     }
 
     if (response.status === 304) {
