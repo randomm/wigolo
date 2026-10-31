@@ -2,6 +2,7 @@ import { parseHTML } from 'linkedom';
 import type { SearchEngine, SearchEngineOptions, RawSearchResult } from '../../types.js';
 import { createLogger } from '../../logger.js';
 import { nextUserAgent, isBlockedError } from './user-agents.js';
+import { lexicalAlignment } from '../core/lexical-alignment.js';
 
 const log = createLogger('search');
 
@@ -61,6 +62,19 @@ function parseDateFromSnippet(snippet: string): string | undefined {
   return undefined;
 }
 
+// True when a parsed SERP looks like a Bing soft-block bait page: multiple
+// results, yet the MEAN lexical alignment (query-token overlap) is
+// effectively zero. Threshold 0.05 leaves headroom for one stray token in
+// one snippet; real SERPs for multi-token queries sit far above it.
+// Fewer than 3 results is inconclusive (could be a legitimately thin SERP),
+// so we do not flag. Exported for table-driven tests.
+export function looksLikeBaitSerp(query: string, results: RawSearchResult[]): boolean {
+  if (results.length < 3) return false;
+  let sum = 0;
+  for (const r of results) sum += lexicalAlignment(query, r.title, r.snippet ?? '');
+  return sum / results.length < 0.05;
+}
+
 export class BingEngine implements SearchEngine {
   name = 'bing';
   private userAgent = nextUserAgent();
@@ -101,7 +115,41 @@ export class BingEngine implements SearchEngine {
     if (!response.ok) throw new Error(`Bing returned ${response.status}`);
 
     const html = await response.text();
-    return this.parseResults(html, maxResults);
+    const results = this.parseResults(html, maxResults);
+
+    // Soft-block detection. Bing intermittently serves cookieless scrapers a
+    // plausible-looking but OFF-TOPIC bait SERP (observed 2026-10-31: telecom
+    // recharge cards and prediction-market videos for a Node.js release
+    // query) while returning HTTP 200. The parser cannot see it — the HTML is
+    // well-formed; only the RELEVANCE is fake. Signal: every result has
+    // near-zero lexical overlap with the query. That shape is also what the
+    // downstream zero-lexical junk floor drops, but it only gates on
+    // pool_collapse — by then the junk has already consumed RRF votes and
+    // consensus. Killing it HERE removes the engine's contribution before
+    // fusion sees it, exactly like a 403 would.
+    if (looksLikeBaitSerp(query, results)) {
+      log.warn('bing soft-block suspected (zero-lexical bait SERP); rotating UA and retrying once', { query });
+      this.onRetry(1, new Error('403 soft-block'));
+      try {
+        const retry = await fetch(url, {
+          signal: AbortSignal.timeout(timeoutMs),
+          headers: {
+            'User-Agent': this.userAgent,
+            'Accept-Language': options.language ?? 'en-US,en;q=0.9',
+          },
+        });
+        if (retry.ok) {
+          const retryResults = this.parseResults(await retry.text(), maxResults);
+          if (!looksLikeBaitSerp(query, retryResults)) return retryResults;
+        }
+      } catch {
+        // fall through to drop
+      }
+      log.warn('bing still zero-lexical after UA rotation; dropping engine contribution for this query');
+      return [];
+    }
+
+    return results;
   }
 
   parseResults(html: string, maxResults: number): RawSearchResult[] {

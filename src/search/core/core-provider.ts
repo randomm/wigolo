@@ -656,8 +656,21 @@ export class CoreSearchProvider implements SearchProvider {
       // top-1 exemption + per-engine rescue from a zero-lexical survivor
       // (per-result on the evidence-components lexical_alignment); a collapsed
       // pool that is entirely zero-lexical empties and surfaces 'no_lexical_match'.
+      // FIX(fork, 2026-10-31): gate on 'thin_pool' as well as 'pool_collapsed'.
+      // Observed incident: DDG rate-limited + Bing served a soft-block bait
+      // SERP; pool landed at 2 contributing engines with a dropout — flagged
+      // 'thin_pool' (advisory) not 'pool_collapsed', so the zero-lexical gate
+      // stayed inert and the top-1 exemption surfaced confident junk at top-N
+      // (which the research pipeline then snowballed). Upstream reserves
+      // emptying for collapse to protect thin-vertical recall; that exemption
+      // is safe here because thin_pool already requires an engine dropout AND
+      // <=2 contributors, and a correct result with EXACTLY zero query-token
+      // overlap is rare. The bing-engine soft-block guard now removes bait
+      // SERPs pre-fusion; this is the second net for any engine's bait shape.
       const poolIsDegraded = dispatches.some((d) =>
-        d.pool_degraded?.reasons?.includes('pool_collapsed'),
+        d.pool_degraded?.reasons?.some(
+          (r) => r === 'pool_collapsed' || r === 'thin_pool',
+        ),
       );
       const lexicalAlignmentOf = (r: RawSearchResult): number =>
         r.evidence_score?.components.lexical_alignment ?? 0;
