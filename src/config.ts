@@ -426,6 +426,25 @@ function envInt(
   return fallback;
 }
 
+/**
+ * Parse a positive-integer env var or setting. A bad value falls back to the
+ * documented default, matching `envInt`, so a typo cannot stop the CLI from
+ * loading. The caller never sees a non-positive value.
+ */
+function envPositiveInt(
+  key: string,
+  fallback: number,
+  settings: Record<string, unknown>,
+  settingsKey?: string,
+): number {
+  const envVal = process.env[key];
+  const raw: unknown = envVal !== undefined ? envVal : settings[settingsKey ?? key];
+  if (raw === undefined || raw === null || raw === '') return fallback;
+
+  const parsed = typeof raw === 'number' ? raw : /^\d+$/.test(String(raw).trim()) ? Number(String(raw).trim()) : NaN;
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 function envFloat(
   key: string,
   fallback: number,
