@@ -69,3 +69,26 @@ Known upstream gaps found while debugging (candidates for issue reports, no PRs)
   keychain service `wigolo-openai`, which **shadows** env vars: keychain → file → env).
 - Benchmark harness + findings: `/tmp/bench/` (ephemeral) and
   `~/wigolo-alternatives-benchmark-2026-10-31.md` (durable).
+## Landing mechanism (decided 2026-11-16)
+
+Waves and fixes land on `main` via **fork PRs that only the owner merges**:
+
+- halo (the always-on box) pushes **topic branches only** (`feat/*`, `docs/*`,
+  `fix/*`) and opens PRs **against this fork's `main`** — it never pushes
+  `main` and never merges. PRs here are own-fork: no upstream CLA exposure.
+- Repo merge buttons are restricted to linearize-only (merge-commit and squash
+  disabled; rebase/fast-forward remain) so `main` stays `upstream + our
+  commits` linear and red/green commits keep their messages and trailers.
+- Branches are kept rebased on `origin/main` while in flight; GitHub
+  auto-deletes the topic branch on merge.
+- Review evidence (red/green proofs, mutant runs, panel triage) lives in the
+  PR and branch commits. Closed PR #1 remains as the archived wave-0 round-1
+  review surface.
+- Upstream posture is unchanged: fixes stay in the fork, upstream gets *issues*
+  with repros; an upstream PR is an explicit human decision each time (CLA).
+- The Mac ritual (rebase onto upstream + `push --force-with-lease`) is for
+  **upstream syncing only**, not for landing waves.
+- Wave gates (`docs/decisions/ADR-0004`): the
+  `merge-base --is-ancestor <wave-tip> origin/main` assert and all tag
+  inputs are read from `origin/main` / peeled remote tags **after** the
+  owner's merge — rebase merges rewrite SHAs, so never trust a pre-merge tip.
