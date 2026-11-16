@@ -61,8 +61,6 @@ function getBuiltInGeneralEngines(): EngineEntry[] {
     entries.push({ engine: wrapWithRetryAndBreaker(new BraveEngine()), weight: 1.1, supportsDateFilter: false, quality: 'medium' });
   }
 
-  // Operator disable list (REQ-4): filtered here, at construction, so the
-  // memo below can never cache a pool the operator opted out of.
   cached = filterDisabledEngines(entries, 'general');
   return cached;
 }

@@ -72,8 +72,6 @@ export function getNewsEngines(): EngineEntry[] {
     log.info('news vertical: rss-feed engine attached');
   }
 
-  // Operator disable list (REQ-4): filtered here, at construction, so the
-  // memo below can never cache a pool the operator opted out of.
   cached = filterDisabledEngines(entries, 'news');
   return cached;
 }
