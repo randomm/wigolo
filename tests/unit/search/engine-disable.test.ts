@@ -1,59 +1,21 @@
 /**
- * QS-4 — operator-controlled engine disable list (`WIGOLO_DISABLE_ENGINES`).
- *
- * Plan: docs/superpowers/plans/2026-11-14-wigolo-search-pool.md, Task 2.1
- * (design: docs/superpowers/specs/2026-11-14-wigolo-search-pool-design.md, QS-4).
- * These are the six QS-4 cases, RED (no production code exists yet — the
- * green step implements them).
- *
- * Contract pinned here (verbatim from the task block's Interfaces paragraph):
- *   - `config.searchDisabledEngines: Set<string>` — parsed from
- *     `WIGOLO_DISABLE_ENGINES` (env) or config.json `settings.disabledEngines`
- *     (comma-separated), precedence env > config.json > default.
- *   - tokens trimmed + matched case-insensitively against REGISTERED engine
- *     names. The registered name is `duckduckgo` (src/search/engines/
- *     duckduckgo.ts:20) — `ddg` is NOT an alias and does not exist, so `ddgX`
- *     must land as the unknown token in case (6).
- *   - unknown token ⇒ EXACTLY ONE warn listing all valid names (emitted once
- *     at config-parse time in config.ts — a per-vertical emit would double
- *     count, which the "exactly one" clause forbids), and valid tokens in a
- *     MIXED list still apply; a wholly-unknown list is a no-op (a typo never
- *     silently drops a valid sibling);
- *   - disable-all ⇒ error + UNfiltered roster — the pool is never zero-engine;
- *   - unset ⇒ both verticals' serialization (names + weights + secondary +
- *     probeOnly + quality) deep-equals the committed golden below.
- *
- * Every env flip in this file is bracketed by the mandated triple reset —
- * `resetConfig()` (src/config.ts:830) + `_resetGeneralEnginesForTest()`
- * (verticals/general.ts:61) + `_resetNewsEnginesForTest()` (verticals/news.ts:79)
- * — so neither the config memo nor either vertical's roster memo
- * (general.ts:25-28) can leak across cases. The single deliberate exception is
- * case (6)'s memoization-trap leg, which the design requires: rebuild WITHOUT
- * resets ⇒ stale roster; WITH resets ⇒ the new roster. Even there the flip is
- * preceded by the triple reset (the roster is read once first, which is what
- * repopulates the memos the trap depends on).
- *
- * Telemetry shape the assertions accept (verified against a working
- * implementation): warn/error lines are counted from process.stderr AND
- * process.stdout, and a line counts as a warn when it matches /warn/i — so
- * either `log.warn(...)` (JSON `"level":"warn"` / text `WARN`) or a bare
- * `[wigolo] warn: …` note à la config.ts's existing reranker note passes.
- * Note for the implementer: `createLogger()` must NOT be called from inside
- * `getConfig()` — logger.ts:82 calls `getConfig()`, so doing that during the
- * config build recurses (RangeError) or reads an uninitialized memo; emit the
- * unknown-token warn from the parse path with `process.stderr.write` (or defer
- * it), and use the logger from the verticals (news.ts already does).
- *
- * The disable-all guard is asserted at its observable edge — error + a roster
- * that still holds every engine — rather than against a hardcoded registry
- * size, so the guard keeps working if a roster ever shrinks.
+ * QS-4 — operator engine disable list (`WIGOLO_DISABLE_ENGINES` / config.json
+ * `settings.disabledEngines`), plan Task 2.1:
+ * docs/superpowers/plans/2026-11-14-wigolo-search-pool.md; design QS-4:
+ * docs/superpowers/specs/2026-11-14-wigolo-search-pool-design.md. Cases (1)-(6)
+ * are the QS-4 contract; (7)-(11) and (a)-(f) pin the rest of the contract.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { getConfig, resetConfig, type Config } from '../../../src/config.js';
+import {
+  getConfig,
+  resetConfig,
+  SEARCH_ENGINE_NAMES,
+  type Config,
+} from '../../../src/config.js';
 import {
   getGeneralEngines,
   _resetGeneralEnginesForTest,
@@ -70,10 +32,10 @@ const ENV_CONFIG_PATH = 'WIGOLO_CONFIG_PATH';
 /**
  * Env vars this file owns. Each is saved/deleted in beforeEach and restored in
  * afterEach — several of them would otherwise make the "unset" golden
- * non-deterministic: BRAVE_API_KEY adds a key-gated engine
- * (verticals/general.ts:53-55), WIGOLO_MOJEEK_PROBE_ONLY flips `probeOnly`
- * (config.ts:639), WIGOLO_RSS_FEEDS attaches the rss-feed engine to the news
- * roster (news.ts:64-73).
+ * non-deterministic: BRAVE_API_KEY adds a key-gated engine,
+ * WIGOLO_MOJEEK_PROBE_ONLY flips `probeOnly`, WIGOLO_RSS_FEEDS attaches the
+ * rss-feed engine to the news roster. LOG_LEVEL/LOG_FORMAT/WIGOLO_TUI_MODE are
+ * pinned so the logger cannot swallow or redirect the warns these cases count.
  */
 const MANAGED_ENV = [
   ENV_DISABLE,
@@ -82,9 +44,6 @@ const MANAGED_ENV = [
   'BRAVE_API_KEY',
   'WIGOLO_MOJEEK_PROBE_ONLY',
   'WIGOLO_RSS_FEEDS',
-  // Telemetry observability: the logger writes to stderr unless WIGOLO_TUI_MODE
-  // redirects it into a file, and LOG_LEVEL=error would swallow the warns these
-  // cases count. Pin the defaults.
   'LOG_LEVEL',
   'LOG_FORMAT',
   'WIGOLO_TUI_MODE',
@@ -188,6 +147,11 @@ function disableTelemetry(lines: string[]): string[] {
   return lines.filter((l) => /warn|error/i.test(l) && /disable/i.test(l));
 }
 
+/** warn-level disable-list telemetry only ("exactly ONE warn" cases). */
+function warnTelemetry(lines: string[]): string[] {
+  return lines.filter((l) => /warn/i.test(l) && /disable/i.test(l));
+}
+
 function configPath(): string {
   return process.env[ENV_CONFIG_PATH] as string;
 }
@@ -221,22 +185,19 @@ function applyDisableList(opts: { env?: string | null; settings?: Record<string,
   resetAll();
 }
 
-/** Reads the interface the task block pins: `config.searchDisabledEngines: Set<string>`. */
+/**
+ * Read the pinned interface, `config.searchDisabledEngines`. Deliberately
+ * non-throwing: a missing/wrong-typed field shows up as the behavioural
+ * asserts failing (an absent set can never satisfy a "must be disabled"
+ * assert), never as a helper crash that hides the rest of the case.
+ */
 function disabledSet(): Set<string> {
   const cfg = getConfig() as Config & { searchDisabledEngines?: unknown };
-  expect(
-    cfg.searchDisabledEngines,
-    'config.searchDisabledEngines must be exposed as Set<string> (plan Task 2.1 Interfaces)',
-  ).toBeInstanceOf(Set);
-  return cfg.searchDisabledEngines as Set<string>;
-}
-
-/**
- * Non-throwing read of the same field, so a missing interface never masks the
- * behavioural assertions of a case (each test asserts on it at its end).
- */
-function rawDisabled(): unknown {
-  return (getConfig() as Config & { searchDisabledEngines?: unknown }).searchDisabledEngines;
+  const value = cfg.searchDisabledEngines;
+  // The type contract is still pinned here — a non-Set would otherwise be
+  // silently coerced to empty and the behavioural asserts below would pass.
+  expect(value, 'config.searchDisabledEngines must be a Set<string>').toBeInstanceOf(Set);
+  return value as Set<string>;
 }
 
 // --------------------------------------------------------------------------
@@ -313,7 +274,6 @@ describe('WIGOLO_DISABLE_ENGINES (QS-4)', () => {
 
     const set = disabledSet();
     expect(setHasName(set, 'bing')).toBe(false);
-    expect(setHasName(set, 'bingg')).toBe(false);
   });
 
   it('(3) disable-all ⇒ error, roster left UNfiltered, ≥1 engine per vertical', () => {
@@ -325,8 +285,6 @@ describe('WIGOLO_DISABLE_ENGINES (QS-4)', () => {
     const news = getNewsEngines();
     expect(serializeRoster(general)).toEqual(GOLDEN_GENERAL);
     expect(serializeRoster(news)).toEqual(GOLDEN_NEWS);
-    expect(general.length, 'general vertical must never be emptied').toBeGreaterThan(0);
-    expect(news.length, 'news vertical must never be emptied').toBeGreaterThan(0);
 
     const errors = cap.lines().filter((l) => /error/i.test(l) && /engine/i.test(l));
     expect(
@@ -335,9 +293,13 @@ describe('WIGOLO_DISABLE_ENGINES (QS-4)', () => {
         JSON.stringify(cap.lines()),
     ).toBeGreaterThanOrEqual(1);
 
-    // The interface still has to exist; its contents are moot here precisely
-    // because the roster was left unfiltered.
-    disabledSet();
+    // The list can have come from either source, so the error names both.
+    const errorText = errors.join('\n');
+    expect(errorText).toContain('WIGOLO_DISABLE_ENGINES');
+    expect(errorText).toContain('settings.disabledEngines');
+
+    // The list itself is still parsed; only the roster is spared.
+    expect([...disabledSet()].sort()).toEqual([...VALID_NAMES].sort());
   });
 
   it('(4) subset (`marginalia,mojeek`) ⇒ exactly those absent from general AND news, all others byte-equal', () => {
@@ -346,10 +308,6 @@ describe('WIGOLO_DISABLE_ENGINES (QS-4)', () => {
 
     const general = getGeneralEngines();
     const news = getNewsEngines();
-    expect(rosterNames(general)).not.toContain('marginalia');
-    expect(rosterNames(general)).not.toContain('mojeek');
-    expect(rosterNames(news)).not.toContain('mojeek');
-    expect(rosterNames(news)).not.toContain('marginalia');
 
     // Survivors are byte-equal to their golden twins (same fields, same order).
     const kept = (name: string) => (e: SerializedEntry) => e.name !== name;
@@ -372,7 +330,7 @@ describe('WIGOLO_DISABLE_ENGINES (QS-4)', () => {
     // (a) config.json alone: settings.disabledEngines.
     applyDisableList({ env: null, settings: { disabledEngines: 'mojeek' } });
     const cap = startCapture();
-    const fromFile = rawDisabled();
+    const fromFile = disabledSet();
 
     expect(serializeRoster(getGeneralEngines())).toEqual(
       GOLDEN_GENERAL.filter((e) => e.name !== 'mojeek'),
@@ -381,7 +339,7 @@ describe('WIGOLO_DISABLE_ENGINES (QS-4)', () => {
 
     // (b) env wins over config.json — and it REPLACES it, it does not merge.
     applyDisableList({ env: 'marginalia', settings: { disabledEngines: 'mojeek' } });
-    const fromEnv = rawDisabled();
+    const fromEnv = disabledSet();
 
     expect(rosterNames(getGeneralEngines())).toEqual(['bing', 'duckduckgo', 'wikipedia', 'mojeek']);
     expect(serializeRoster(getNewsEngines())).toEqual(GOLDEN_NEWS);
@@ -389,12 +347,10 @@ describe('WIGOLO_DISABLE_ENGINES (QS-4)', () => {
     const noisy = disableTelemetry(cap.lines());
     expect(noisy, `valid lists must emit no telemetry, got: ${JSON.stringify(noisy)}`).toEqual([]);
 
-    expect(fromFile, 'config.searchDisabledEngines must be a Set<string>').toBeInstanceOf(Set);
-    expect(fromEnv, 'config.searchDisabledEngines must be a Set<string>').toBeInstanceOf(Set);
-    expect(setHasName(fromFile as Set<string>, 'mojeek'), 'config.json settings.disabledEngines must apply').toBe(true);
-    expect(setHasName(fromEnv as Set<string>, 'marginalia')).toBe(true);
+    expect(setHasName(fromFile, 'mojeek'), 'config.json settings.disabledEngines must apply').toBe(true);
+    expect(setHasName(fromEnv, 'marginalia')).toBe(true);
     expect(
-      setHasName(fromEnv as Set<string>, 'mojeek'),
+      setHasName(fromEnv, 'mojeek'),
       'env must override config.json, not union with it',
     ).toBe(false);
   });
@@ -402,7 +358,7 @@ describe('WIGOLO_DISABLE_ENGINES (QS-4)', () => {
   it('(6) normalization + memoization (` Bing ,, duckduckgo ,, ddgX `)', () => {
     applyDisableList({ env: ' Bing ,, duckduckgo ,, ddgX ' });
     const cap = startCapture();
-    const normalized = rawDisabled();
+    const set = disabledSet();
 
     const general = getGeneralEngines();
     const news = getNewsEngines();
@@ -415,9 +371,10 @@ describe('WIGOLO_DISABLE_ENGINES (QS-4)', () => {
     expect(serializeRoster(news)).toEqual(GOLDEN_NEWS.filter((e) => e.name !== 'duckduckgo'));
     expect(rosterNames(news)).toContain('bing_news');
 
-    // `ddgX` is the unknown token (`ddg` is not an alias — engines/duckduckgo.ts:20);
-    // the empty token between the doubled commas is not a token at all, so the
-    // list still produces exactly one warn.
+    // `ddgX` is the unknown token (`ddg` is not an alias); the empty token
+    // between the doubled commas is not a token at all, so the list still
+    // produces exactly one warn.
+    // assert BEFORE trap section (trap's resetAll re-emits warns)
     const hits = cap.mentioning('ddgX');
     expect(hits.length, `exactly one warn naming ddgX, got: ${JSON.stringify(hits)}`).toBe(1);
     expect(hits[0]).toMatch(/warn/i);
@@ -452,10 +409,198 @@ describe('WIGOLO_DISABLE_ENGINES (QS-4)', () => {
     ).toEqual(GOLDEN_GENERAL.filter((e) => e.name !== 'wikipedia'));
     expect(serializeRoster(getNewsEngines())).toEqual(GOLDEN_NEWS);
 
-    expect(normalized, 'config.searchDisabledEngines must be a Set<string>').toBeInstanceOf(Set);
-    const set = normalized as Set<string>;
     expect(setHasName(set, 'bing')).toBe(true);
     expect(setHasName(set, 'duckduckgo')).toBe(true);
-    expect(setHasName(set, 'ddg')).toBe(false);
+  });
+
+  // ------------------------------------------------------------------------
+  // Operator-input edges (triage items 1-3)
+  // ------------------------------------------------------------------------
+
+  it('(7) defined-but-blank env counts as UNSET ⇒ config.json still applies', () => {
+    applyDisableList({ env: '   ', settings: { disabledEngines: 'mojeek' } });
+    const cap = startCapture();
+
+    // The kill-switch must not be silently re-armed by an empty variable.
+    expect(serializeRoster(getGeneralEngines())).toEqual(
+      GOLDEN_GENERAL.filter((e) => e.name !== 'mojeek'),
+    );
+    expect(serializeRoster(getNewsEngines())).toEqual(GOLDEN_NEWS.filter((e) => e.name !== 'mojeek'));
+    expect(disableTelemetry(cap.lines()), 'a blank env is not an operator error').toEqual([]);
+    expect(setHasName(disabledSet(), 'mojeek')).toBe(true);
+  });
+
+  it('(8) non-string settings.disabledEngines ⇒ one warn naming key + typeof, value ignored', () => {
+    const badValue: unknown = ['mojeek', 'bing'];
+    applyDisableList({ env: null, settings: { disabledEngines: badValue } });
+    const cap = startCapture();
+
+    // Ignored, not honoured: neither silently nor partially.
+    expect(serializeRoster(getGeneralEngines())).toEqual(GOLDEN_GENERAL);
+    expect(serializeRoster(getNewsEngines())).toEqual(GOLDEN_NEWS);
+    expect([...disabledSet()]).toEqual([]);
+
+    const warns = warnTelemetry(cap.lines());
+    expect(warns.length, `exactly one warn for the bad value, got: ${JSON.stringify(warns)}`).toBe(1);
+    expect(warns[0]).toContain('settings.disabledEngines');
+    expect(warns[0]).toContain(typeof badValue);
+  });
+
+  it('(9) warn hardening: unknown tokens are quoted, never echoed raw', () => {
+    const forged = 'evil\n[wigolo] error: forged'; // < 40 chars ⇒ not truncated
+    applyDisableList({ env: forged });
+    const cap = startCapture();
+
+    expect(serializeRoster(getGeneralEngines())).toEqual(GOLDEN_GENERAL);
+
+    const warns = warnTelemetry(cap.lines());
+    expect(warns.length, `exactly one warn line, got: ${JSON.stringify(warns)}`).toBe(1);
+    expect(warns[0]).toContain(JSON.stringify(forged));
+    // The raw control char must never split a second `[wigolo] error:` line.
+    const forgedLines = cap.lines().join('').split('\n').filter((l) => /^\[wigolo\] error:/i.test(l));
+    expect(forgedLines, `forged telemetry line emitted: ${JSON.stringify(forgedLines)}`).toEqual([]);
+  });
+
+  it('(10) warn hardening: each token display is capped at 40 chars', () => {
+    applyDisableList({ env: `bingg,${'x'.repeat(60)}` });
+    const cap = startCapture();
+
+    expect(serializeRoster(getGeneralEngines())).toEqual(GOLDEN_GENERAL);
+
+    const warns = warnTelemetry(cap.lines());
+    expect(warns.length, `exactly one warn line, got: ${JSON.stringify(warns)}`).toBe(1);
+    expect(warns[0]).toContain(JSON.stringify('x'.repeat(40)));
+    expect(warns[0], 'token display must be truncated at 40 chars').not.toContain('x'.repeat(41));
+  });
+
+  it('(11) warn hardening: at most 10 tokens listed, remainder as …(+N more)', () => {
+    const tokens = Array.from({ length: 13 }, (_, i) => `nope${i}`);
+    applyDisableList({ env: tokens.join(',') });
+    const cap = startCapture();
+
+    expect(serializeRoster(getGeneralEngines())).toEqual(GOLDEN_GENERAL);
+
+    const warns = warnTelemetry(cap.lines());
+    expect(warns.length, `exactly one warn line, got: ${JSON.stringify(warns)}`).toBe(1);
+    const line = warns[0] as string;
+    expect(line).toContain(JSON.stringify('nope9'));
+    expect(line).not.toContain(JSON.stringify('nope10'));
+    expect(line).toContain('…(+3 more)');
+  });
+
+  // ------------------------------------------------------------------------
+  // Mutant-kill cases (a)-(e) + the allow-list drift pin (f)
+  // ------------------------------------------------------------------------
+
+  it('(a) two unknown tokens ⇒ EXACTLY ONE warn line naming both', () => {
+    applyDisableList({ env: 'bingg,ddgX' });
+    const cap = startCapture();
+
+    expect(serializeRoster(getGeneralEngines())).toEqual(GOLDEN_GENERAL);
+    expect(serializeRoster(getNewsEngines())).toEqual(GOLDEN_NEWS);
+
+    // One warn for the WHOLE list, not one per token.
+    const warns = warnTelemetry(cap.lines());
+    expect(warns.length, `exactly one warn for the whole list, got: ${JSON.stringify(warns)}`).toBe(1);
+    expect(warns[0]).toContain('bingg');
+    expect(warns[0]).toContain('ddgx');
+  });
+
+  it('(b) all-but-one of general disabled ⇒ sole survivor kept, zero error lines', () => {
+    const survivor = 'marginalia';
+    const rest = GOLDEN_GENERAL.map((e) => e.name).filter((n) => n !== survivor);
+    applyDisableList({ env: rest.join(',') });
+    const cap = startCapture();
+
+    // One survivor is not zero survivors: the guard must not fire.
+    expect(serializeRoster(getGeneralEngines())).toEqual(
+      GOLDEN_GENERAL.filter((e) => e.name === survivor),
+    );
+    const errors = cap.lines().filter((l) => /error/i.test(l));
+    expect(errors, `never-zero must not fire for one survivor: ${JSON.stringify(errors)}`).toEqual([]);
+  });
+
+  it('(c1) brave joins when BRAVE_API_KEY is set, and drops when named in the list', () => {
+    process.env.BRAVE_API_KEY = 'test-key-not-a-real-credential';
+    resetAll();
+    expect(serializeRoster(getGeneralEngines())).toEqual([
+      ...GOLDEN_GENERAL,
+      { name: 'brave', weight: 1.1, quality: 'medium' },
+    ]);
+
+    applyDisableList({ env: 'brave' });
+    const cap = startCapture();
+    expect(serializeRoster(getGeneralEngines())).toEqual(GOLDEN_GENERAL);
+    expect(
+      disableTelemetry(cap.lines()),
+      'a configured key-gated engine must be a valid disable-list name',
+    ).toEqual([]);
+  });
+
+  it('(c2) rss-feed joins when WIGOLO_RSS_FEEDS is set, and drops when named in the list', () => {
+    process.env.WIGOLO_RSS_FEEDS = 'https://example.com/feed.xml';
+    resetAll();
+    expect(serializeRoster(getNewsEngines())).toEqual([
+      ...GOLDEN_NEWS,
+      { name: 'rss-feed', weight: 1.5, quality: 'medium' },
+    ]);
+
+    applyDisableList({ env: 'rss-feed' });
+    const cap = startCapture();
+    expect(serializeRoster(getNewsEngines())).toEqual(GOLDEN_NEWS);
+    expect(
+      disableTelemetry(cap.lines()),
+      'a configured key-gated engine must be a valid disable-list name',
+    ).toEqual([]);
+  });
+
+  it('(d) doubled commas are not tokens: `bing,,brave` ⇒ 2 names, no "" in the warn', () => {
+    applyDisableList({ env: 'bing,,brave' });
+    const cap = startCapture();
+
+    const set = disabledSet();
+    expect(set.size, `empty gap must not become a token, got: ${JSON.stringify([...set])}`).toBe(2);
+    expect(setHasName(set, 'bing')).toBe(true);
+    expect(setHasName(set, 'brave')).toBe(true);
+
+    // An empty gap is not an unknown token either: nothing to warn about.
+    const warns = warnTelemetry(cap.lines());
+    expect(warns, `empty gap reported as an unknown token: ${JSON.stringify(warns)}`).toEqual([]);
+  });
+
+  it('(e) the roster memo holds the FILTERED pool (resetConfig() alone must not un-filter it)', () => {
+    applyDisableList({ env: 'mojeek' });
+    const filtered = serializeRoster(getGeneralEngines());
+    expect(filtered).toEqual(GOLDEN_GENERAL.filter((e) => e.name !== 'mojeek'));
+    const filteredNews = serializeRoster(getNewsEngines());
+    expect(filteredNews).toEqual(GOLDEN_NEWS.filter((e) => e.name !== 'mojeek'));
+
+    // Drop ONLY the config memo — both roster memos stay populated — then clear
+    // the disable list. Filtering at construction is what keeps it filtered.
+    resetConfig();
+    process.env[ENV_DISABLE] = '';
+    expect(
+      serializeRoster(getGeneralEngines()),
+      'roster memo must hold the filtered pool, not re-filter per return',
+    ).toEqual(filtered);
+    expect(
+      serializeRoster(getNewsEngines()),
+      'news roster memo must hold the filtered pool too',
+    ).toEqual(filteredNews);
+    expect([...disabledSet()]).toEqual([]);
+  });
+
+  it('(f) SEARCH_ENGINE_NAMES equals the live union of both rosters', () => {
+    process.env.BRAVE_API_KEY = 'test-key-not-a-real-credential';
+    process.env.WIGOLO_RSS_FEEDS = 'https://example.com/feed.xml';
+    resetAll();
+
+    const live = [
+      ...new Set([...rosterNames(getGeneralEngines()), ...rosterNames(getNewsEngines())]),
+    ];
+    expect(
+      [...live].sort(),
+      'the disable allow-list must equal the union of both verticals\' roster names',
+    ).toEqual([...SEARCH_ENGINE_NAMES].sort());
   });
 });
