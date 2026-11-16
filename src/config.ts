@@ -119,6 +119,16 @@ export interface Config {
   validateLinks: boolean;
   respectRobotsTxt: boolean;
   braveApiKey: string | null;
+  /** Task 2.1 (REQ-4) — the operator's engine disable list, parsed from
+   * `WIGOLO_DISABLE_ENGINES` (env) or config.json `settings.disabledEngines`
+   * (both comma-separated; precedence env > config.json > built-in default).
+   * Tokens are trimmed, lowercased and matched against
+   * {@link SEARCH_ENGINE_NAMES}; unknown tokens are dropped (reported once at
+   * parse time) so a typo can never silently drop a valid sibling. The roster
+   * filter that consumes this lives in {@link filterDisabledEngines}, applied
+   * at construction — BEFORE the verticals memoize their rosters. Empty Set
+   * when unset. */
+  searchDisabledEngines: Set<string>;
   /** GitHub API personal access token. When set, the github-code adapter
    * passes it as a Bearer token so search calls run authenticated. Lifts
    * the 10 req/min unauthed cap to 30 req/min, eliminates the most common
@@ -632,6 +642,95 @@ export function redditApiConfigured(cfg: Config = getConfig()): boolean {
   return !!cfg.redditClientId && !!cfg.redditClientSecret;
 }
 
+/**
+ * Engine names an operator may name in `WIGOLO_DISABLE_ENGINES` — the engines
+ * the two verticals this list filters can put into their pool
+ * (`src/search/core/verticals/general.ts`, `.../verticals/news.ts`). `brave`
+ * and `rss-feed` only join their roster when configured (API key / feeds), but
+ * they are disable-able when they do. Keep in sync with those roster builders
+ * (and with the `name` field of each engine class — matching is by that exact
+ * registered name, case-insensitively; there are no aliases).
+ */
+const SEARCH_ENGINE_NAMES: readonly string[] = [
+  'bing',
+  'duckduckgo',
+  'wikipedia',
+  'brave',
+  'mojeek',
+  'marginalia',
+  'hn-algolia',
+  'lobsters',
+  'bing_news',
+  'rss-feed',
+];
+
+/**
+ * Parse the operator engine disable list (Task 2.1 / QS-4) — the comma-
+ * separated value of `WIGOLO_DISABLE_ENGINES` or config.json
+ * `settings.disabledEngines` — into lowercased names, keeping only registered
+ * engine names.
+ *
+ * Footgun guards: empty gaps between doubled commas are not tokens; unknown
+ * tokens are dropped and reported in EXACTLY ONE warn naming every valid name
+ * (one warn for the whole list, emitted from this parse path — `createLogger()`
+ * calls `getConfig()`, so it cannot be used while the config is still being
+ * built). A wholly-unknown list therefore yields the empty set: a typo like
+ * `bingg` never silently drops a valid sibling, and valid tokens in a mixed
+ * list still apply. The never-zero-engine guard lives with the roster filter in
+ * {@link filterDisabledEngines}.
+ */
+function parseDisabledEngines(raw: string | null): Set<string> {
+  if (!raw) return new Set<string>();
+  const valid = new Set<string>(SEARCH_ENGINE_NAMES);
+  const kept: string[] = [];
+  const unknown: string[] = [];
+  for (const part of raw.split(',')) {
+    const token = part.trim().toLowerCase();
+    if (!token) continue;
+    if (valid.has(token)) {
+      if (!kept.includes(token)) kept.push(token);
+    } else if (!unknown.includes(token)) {
+      unknown.push(token);
+    }
+  }
+  if (unknown.length > 0) {
+    process.stderr.write(
+      `[wigolo] warn: WIGOLO_DISABLE_ENGINES / settings.disabledEngines: unknown engine name(s) ` +
+      `${unknown.join(', ')} ignored. Valid engine names (general + news verticals): ` +
+      `${SEARCH_ENGINE_NAMES.join(', ')}\n`,
+    );
+  }
+  return new Set(kept);
+}
+
+/**
+ * Drop the engines the operator opted out of from a freshly built roster
+ * (Task 2.1 / QS-4). The two vertical roster builders call this AT
+ * CONSTRUCTION, BEFORE they memoize, so neither roster cache can ever serve a
+ * pool the operator disabled.
+ *
+ * Never zero-engine: if the filter would empty the vertical, the roster is
+ * left UNfiltered and the mistake is surfaced as an error — a pool with no
+ * engines returns nothing at all, which is a strictly worse outcome than
+ * keeping the engines the operator asked to drop (disable-all footgun).
+ */
+export function filterDisabledEngines<T extends { engine: { name: string } }>(
+  entries: T[],
+  vertical: string,
+): T[] {
+  const disabled = getConfig().searchDisabledEngines;
+  if (disabled.size === 0) return entries;
+  const kept = entries.filter((e) => !disabled.has(e.engine.name.trim().toLowerCase()));
+  if (kept.length === 0) {
+    process.stderr.write(
+      `[wigolo] error: ${vertical} vertical: WIGOLO_DISABLE_ENGINES would disable every engine in ` +
+      `the pool — roster left unchanged. Valid engine names: ${SEARCH_ENGINE_NAMES.join(', ')}\n`,
+    );
+    return entries;
+  }
+  return kept;
+}
+
 let cachedConfig: Config | null = null;
 
 export function getConfig(): Config {
@@ -706,6 +805,11 @@ export function getConfig(): Config {
     validateLinks: envBool('VALIDATE_LINKS', true, settings, 'validateLinks'),
     respectRobotsTxt: envBool('RESPECT_ROBOTS_TXT', true, settings, 'respectRobotsTxt'),
     braveApiKey: envStr('BRAVE_API_KEY', null, settings, 'braveApiKey'),
+    // Operator engine disable list (REQ-4): explicit env var > config.json
+    // `settings.disabledEngines` > default (empty ⇒ nothing disabled).
+    searchDisabledEngines: parseDisabledEngines(
+      envStr('WIGOLO_DISABLE_ENGINES', null, settings, 'disabledEngines'),
+    ),
     githubToken: envStr('WIGOLO_GITHUB_TOKEN', null, settings, 'githubToken'),
     logLevel: (envStr('LOG_LEVEL', 'info', settings, 'logLevel') as Config['logLevel']),
     logFormat: (envStr('LOG_FORMAT', 'json', settings, 'logFormat') as Config['logFormat']),

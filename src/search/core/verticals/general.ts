@@ -10,7 +10,7 @@ import {
   MARGINALIA_MIN_INTERVAL_MS,
   type EngineEntry,
 } from '../engine-base.js';
-import { getConfig } from '../../../config.js';
+import { getConfig, filterDisabledEngines } from '../../../config.js';
 import { getPluginEngineEntries } from '../plugin-engines.js';
 
 // Marginalia rate-limits (429) aggressively under a burst. Spacing its calls
@@ -61,7 +61,9 @@ function getBuiltInGeneralEngines(): EngineEntry[] {
     entries.push({ engine: wrapWithRetryAndBreaker(new BraveEngine()), weight: 1.1, supportsDateFilter: false, quality: 'medium' });
   }
 
-  cached = entries;
+  // Operator disable list (REQ-4): filtered here, at construction, so the
+  // memo below can never cache a pool the operator opted out of.
+  cached = filterDisabledEngines(entries, 'general');
   return cached;
 }
 
