@@ -7,7 +7,7 @@ import { wrapWithRetryAndBreaker, type EngineEntry } from '../engine-base.js';
 import { RssFeedEngine } from '../rss/rss-engine.js';
 import { loadFeedConfig } from '../rss/feed-config.js';
 import { countFeedItems } from '../rss/feed-store.js';
-import { getConfig } from '../../../config.js';
+import { getConfig, filterDisabledEngines } from '../../../config.js';
 import { createLogger } from '../../../logger.js';
 
 const log = createLogger('search');
@@ -72,7 +72,9 @@ export function getNewsEngines(): EngineEntry[] {
     log.info('news vertical: rss-feed engine attached');
   }
 
-  cached = entries;
+  // Operator disable list (REQ-4): filtered here, at construction, so the
+  // memo below can never cache a pool the operator opted out of.
+  cached = filterDisabledEngines(entries, 'news');
   return cached;
 }
 
