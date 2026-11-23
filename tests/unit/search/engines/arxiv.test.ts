@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { ArxivEngine } from '../../../../src/search/engines/arxiv.js';
+import { ThrottledError } from '../../../../src/search/core/engine-base.js';
+import { getPapersEngines } from '../../../../src/search/core/verticals/papers.js';
 
 interface FetchCall {
   url: string;
@@ -95,5 +97,38 @@ describe('ArxivEngine', () => {
     const { calls } = captureFetch('<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom"></feed>');
     await new ArxivEngine().search('q');
     expect(calls[0].init?.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  // Live incident 2026-11-23 (papers vertical nearly dead): the only
+  // plain-http engine on this box is arXiv, and the egress proxy is
+  // CONNECT-443-only — every request died in the proxy, not at arXiv.
+  it('requests the API over https (proxy denies plain http CONNECT)', async () => {
+    const { calls } = captureFetch('<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom"></feed>');
+    await new ArxivEngine().search('q');
+    expect(calls[0].url.startsWith('https://export.arxiv.org/')).toBe(true);
+  });
+
+  it('sends a descriptive User-Agent (arXiv API etiquette)', async () => {
+    const { calls } = captureFetch('<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom"></feed>');
+    await new ArxivEngine().search('q');
+    const ua = (calls[0].init?.headers as Record<string, string> | undefined)?.['User-Agent'];
+    expect(typeof ua).toBe('string');
+    expect(ua && ua.length > 0).toBe(true);
+  });
+
+  // arXiv's API etiquette asks for ≤1 request / 3 s per client; the skip-on-
+  // throttle machinery exists exactly for this (marginalia precedent).
+  it('papers vertical registers a min inter-request interval for arxiv', async () => {
+    vi.useFakeTimers();
+    try {
+      const entries = getPapersEngines();
+      const arxivEntry = entries.find((e) => e.engine.name === 'arxiv');
+      expect(arxivEntry, 'arxiv must be in the papers roster').toBeDefined();
+      captureFetch('<?xml version="1.0"?><feed xmlns="http://www.w3.org/2005/Atom"></feed>');
+      await arxivEntry!.engine.search('q');
+      await expect(arxivEntry!.engine.search('q')).rejects.toBeInstanceOf(ThrottledError);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
