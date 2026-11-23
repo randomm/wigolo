@@ -38,8 +38,11 @@ export class OpenReviewEngine implements SearchEngine {
     // `source=forum` restricts results to the note that opened each forum — the
     // paper submission itself — so reviews and comments (which carry no title
     // and only reference the paper) never enter the result set.
+    // api2.openreview.net renamed the search parameter: `query` now returns
+    // 400 ValidationError ("term" is required), which made this engine fail
+    // 100% of requests (verified live 2026-11-23).
     const params = new URLSearchParams({
-      query,
+      term: query,
       source: 'forum',
       limit: String(maxResults),
     });
