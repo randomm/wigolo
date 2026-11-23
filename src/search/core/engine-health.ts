@@ -177,3 +177,62 @@ export function getEngineHealthSummary(): EngineHealthEntry[] {
 
   return out;
 }
+
+/**
+ * Machine-readable view of the EFFECTIVE engine configuration — the
+ * "which engines are actually active" answer an operator can get without
+ * reading env vars or config.json (REQ-4 pre-work). Surfaced by doctor
+ * alongside the per-engine health summary.
+ *
+ * Deliberately secrets-free: names and booleans only. The `active` flag
+ * reads the MEMOIZED vertical rosters themselves — the same structures the
+ * orchestrator dispatches from — so it mirrors the verticals' decisions
+ * exactly (key gating + operator disable filter) with zero re-reads of
+ * env/feed-config. `active: true` means "would dispatch right now". Pure,
+ * no network, no side effects beyond the roster memoization the health
+ * summary already triggers.
+ */
+export interface OptionalEnginePolicy {
+  name: string;
+  /** True iff the engine is configured (key/token/feeds present) AND not in
+   * the operator disable list — i.e. it would be in its vertical's roster. */
+  active: boolean;
+}
+
+export interface EnginePolicy {
+  /** Effective operator disable list (config `searchDisabledEngines`, i.e.
+   * WIGOLO_DISABLE_ENGINES > settings.disabledEngines), sorted. */
+  disabled: string[];
+  /** The key/feed-gated engines and whether each is active right now. */
+  optional_engines: OptionalEnginePolicy[];
+}
+
+/**
+ * Key/feed-gated optional engines and the vertical whose roster builder
+ * gates them (verticals/general.ts, images.ts, code.ts, news.ts). Activity
+ * is read from the built roster itself — the roster builder applies the key
+ * gating (braveApiKey / githubToken / feed config) at construction, so
+ * presence in the pool IS the vertical's decision, with no chance of drift
+ * and no extra config/feed-config reads that could diverge from what the
+ * orchestrator would actually dispatch. The explicit disable check stays on
+ * top because filterDisabledEngines() keeps an all-disabled roster
+ * UNfiltered (never-zero-engine fail-safe) — presence alone would then lie.
+ */
+const OPTIONAL_ENGINE_ROSTERS: Array<{ name: string; pool: () => EngineEntry[] }> = [
+  { name: 'brave', pool: getGeneralEngines },
+  { name: 'brave-image', pool: getImageEngines },
+  { name: 'github-code', pool: getCodeEngines },
+  { name: 'rss-feed', pool: getNewsEngines },
+];
+
+export function getEnginePolicy(): EnginePolicy {
+  const disabled = [...getConfig().searchDisabledEngines].sort();
+  const disabledSet = new Set(disabled);
+  return {
+    disabled,
+    optional_engines: OPTIONAL_ENGINE_ROSTERS.map(({ name, pool }) => ({
+      name,
+      active: !disabledSet.has(name) && pool().some((e) => e.engine.name === name),
+    })),
+  };
+}

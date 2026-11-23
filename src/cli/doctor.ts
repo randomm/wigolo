@@ -18,8 +18,10 @@ import { getBackgroundIndexQueue } from '../embedding/background-queue.js';
 import { loadFeedConfig } from '../search/core/rss/feed-config.js';
 import {
   getEngineHealthSummary,
+  getEnginePolicy,
   getRegisteredEngineEntries,
   type EngineHealthEntry,
+  type EnginePolicy,
 } from '../search/core/engine-health.js';
 import type { EngineEntry } from '../search/core/engine-base.js';
 import { isTelemetryEnabled } from './telemetry.js';
@@ -280,6 +282,26 @@ export function formatEngineHealthLines(entries: EngineHealthEntry[]): string[] 
     lines.push(`  ${name} ${vertical} ${suffix}${breakerNote}${limitationNote}`);
   }
   return lines;
+}
+
+/**
+ * Format the engine-policy view (getEnginePolicy()) for doctor output.
+ * Pure so the lines can be asserted from tests without spinning up the CLI.
+ *
+ *   disabled → "  disabled:  brave, ddg-image"   (or "(none)")
+ *   gating   → "  optional:  brave=inactive  brave-image=active  github-code=inactive  rss-feed=active"
+ *
+ * WHY: the per-engine health table shows what the pools contain, but an
+ * operator reading `doctor` should ALSO see, without reading env, the
+ * effective disable list and whether each key/feed-gated engine is actually
+ * active right now. Renders names and booleans only — never key values.
+ */
+export function formatEnginePolicyLines(policy: EnginePolicy): string[] {
+  const disabledLine = `  disabled:  ${policy.disabled.length > 0 ? policy.disabled.join(', ') : '(none)'}`;
+  const optionalLine = `  optional:  ${policy.optional_engines
+    .map((e) => `${e.name}=${e.active ? 'active' : 'inactive'}`)
+    .join('  ')}`;
+  return [disabledLine, optionalLine];
 }
 
 /**
@@ -915,6 +937,19 @@ async function runDoctorInner(dataDir: string, opts?: DoctorOptions): Promise<nu
     // Engine pool construction should never throw, but degrade gracefully if
     // a vertical fails to load — doctor must keep going.
     out(`  (engine health summary failed: ${errorLine(err)})`);
+  }
+
+  // Effective engine policy: the operator disable list + whether each
+  // key/feed-gated engine is actually active, so "which engines are running"
+  // is answerable from doctor alone. Names + booleans only, never key values.
+  try {
+    out('');
+    out('[wigolo doctor] Engine policy:');
+    for (const line of formatEnginePolicyLines(getEnginePolicy())) {
+      out(line);
+    }
+  } catch (err) {
+    out(`  (engine policy view failed: ${errorLine(err)})`);
   }
 
   // Opt-in live probe of every registered engine. Off by default —
