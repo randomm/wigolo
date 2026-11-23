@@ -1,7 +1,8 @@
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { DuckDuckGoEngine } from '../../../../src/search/engines/duckduckgo.js';
 import { isBlockedError } from '../../../../src/search/engines/user-agents.js';
+import { wrapWithRetryAndBreaker, classifyFailure, _resetBreakersForTest } from '../../../../src/search/core/engine-base.js';
 
 const fixtureHtml = readFileSync('tests/fixtures/search/duckduckgo-results.html', 'utf-8');
 
@@ -124,6 +125,55 @@ describe('DuckDuckGoEngine', () => {
     it('non-2xx like 500 still throws (regression guard)', async () => {
       stubStatus(500);
       await expect(new DuckDuckGoEngine().search('q')).rejects.toThrow(/500/);
+    });
+  });
+
+  // Review round-1 (PR #4) test-quality lane: the raw-engine tests above do
+  // not exercise onRetry rotation or the wrapper machinery the 202 fix exists
+  // to trigger. These close the surviving mutants (no-op onRetry; message
+  // reword flipping the breaker class).
+  describe('202 handling end-to-end through the wrapper (review nits)', () => {
+    function stub202CapturingUA() {
+      const uas: string[] = [];
+      vi.spyOn(global, 'fetch').mockImplementation(async (_input, init) => {
+        uas.push(String((init?.headers as Record<string, string>)?.['User-Agent'] ?? ''));
+        return { ok: true, status: 202, text: async () => '<html>challenge</html>' } as Response;
+      });
+      return uas;
+    }
+
+    beforeEach(() => _resetBreakersForTest());
+    afterEach(() => vi.restoreAllMocks());
+
+    it('onRetry after a 202 error rotates the User-Agent', async () => {
+      const uas = stub202CapturingUA();
+      const engine = new DuckDuckGoEngine();
+      const err = await engine.search('q').catch((e) => e);
+      expect(err).toBeInstanceOf(Error);
+      engine.onRetry(1, err);
+      await engine.search('q').catch(() => undefined);
+      expect(uas).toHaveLength(2);
+      expect(uas[0]).not.toBe('');
+      // Kills the no-op-onRetry mutant: without rotation the second call
+      // reuses the identical UA.
+      expect(uas[1]).not.toBe(uas[0]);
+    });
+
+    it('wrapper retries 202 with a DIFFERENT UA and ultimately rejects', async () => {
+      const uas = stub202CapturingUA();
+      const wrapped = wrapWithRetryAndBreaker(new DuckDuckGoEngine(), { retryAttempts: 2 });
+      await expect(wrapped.search('q')).rejects.toThrow(/202/);
+      expect(uas).toHaveLength(2);
+      expect(uas[1]).not.toBe(uas[0]);
+    });
+
+    it('the 202 error is classified "other" — deliberate pin (fingerprint block, not rate-limit)', () => {
+      // This choice carries the full breaker cooldown + chronic counters
+      // (a 'rate-limit' class would get the 5s transient window). If the
+      // message is ever reworded onto /429|rate.?limit/, the breaker
+      // semantics silently change — this assertion makes that fail loudly.
+      // Synthetic error (no fetch): the message string is the contract.
+      expect(classifyFailure(new Error('DDG blocked (bot challenge): HTTP 202'))).toBe('other');
     });
   });
 });
