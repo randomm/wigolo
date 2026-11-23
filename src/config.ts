@@ -897,7 +897,7 @@ export function getConfig(): Config {
     onnxThreads: envInt('WIGOLO_ONNX_THREADS', 0, settings, 'onnxThreads'),
     embeddingApiBase: envStr('WIGOLO_EMBEDDING_API_BASE', null, settings, 'embeddingApiBase'),
     embeddingApiKey: resolveKeychainSecret('WIGOLO_EMBEDDING_API_KEY', 'embeddingApiKey'),
-    embeddingRequestTimeoutMs: envInt('WIGOLO_EMBEDDING_REQUEST_TIMEOUT_MS', 30_000, settings, 'embeddingRequestTimeoutMs'),
+    embeddingRequestTimeoutMs: envPositiveInt('WIGOLO_EMBEDDING_REQUEST_TIMEOUT_MS', 30_000, settings, 'embeddingRequestTimeoutMs'),
     searchBackend: envStr('WIGOLO_SEARCH', null, settings, 'searchBackend'),
     llmProvider: envStr('WIGOLO_LLM_PROVIDER', null, settings, 'llmProvider'),
     llmBaseUrl: envStr('WIGOLO_LLM_BASE_URL', null, settings, 'llmBaseUrl'),
