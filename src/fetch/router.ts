@@ -1439,6 +1439,9 @@ export class SmartRouter {
       // halo: egress-proxy-ssrf — a proxy refusal is a policy answer, not a flaky host: it must not
       // count toward browser escalation or mark the domain preferPlaywright.
       if (isEgressPolicyError(err)) throw err;
+      // Over the size cap: another tier would just download the same body
+      // again, and it says nothing about the domain's health.
+      if (isResponseTooLarge(err)) throw err;
       stats.failureCount++;
       logger.warn('http fetch failed', {
         url,
