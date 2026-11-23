@@ -42,6 +42,13 @@ export class DuckDuckGoEngine implements SearchEngine {
       headers: { 'User-Agent': this.userAgent },
     });
 
+    // 202 is DDG's bot-challenge response: a 2xx that carries no results.
+    // Treating it as success made the engine silently report 0 results as
+    // healthy — no retry, no UA rotation (onRetry only fires on throw), no
+    // breaker trip, nothing operator-visible (live incident 2026-11-23).
+    // Message wording keeps the isBlockedError contract (matches "blocked"),
+    // so the wrapper rotates the User-Agent on retry.
+    if (response.status === 202) throw new Error(`DDG blocked (bot challenge): HTTP 202`);
     if (!response.ok) throw new Error(`DDG returned ${response.status}`);
 
     const html = await response.text();
