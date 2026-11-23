@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+### Added
+- Remote embeddings: `WIGOLO_EMBEDDING_API_BASE` sends cache embeddings to an OpenAI-compatible `/embeddings` endpoint. `WIGOLO_EMBEDDING_API_KEY` holds an optional Bearer token. A keyless base can use plain HTTP. A key needs HTTPS unless the host is loopback. Wigolo skips the bundled model when the base exists. (fixes #674)
+- `fetch` results flag block pages with an optional `blocked: { reason }` (`challenge`, `block_page` or `js_required`). A bot wall or "you've been blocked" banner that came back as content still returns its markdown, but callers no longer have to text-sniff it. (fixes #650)
+
+### Changed
+- `find_similar` scores only rows that carry the active model id, for the bundled model too. Rows written under an older model id no longer match, so an endpoint or model change hides them. (fixes #674)
+- A remote embedding endpoint trims input to `WIGOLO_EMBEDDING_MAX_TEXT_LENGTH` before the send, keeps at most 4 requests in flight, and falls back to the default timeout when the value is not a positive integer. (fixes #674)
+### Fixed
+- A browser launch no longer fails with `URIError: URI malformed` when the proxy username or password holds a `%` that is not a valid escape (for example `PROXY_URL=http://user:50%off@proxy:8080`). The credentials now reach the browser as typed. Valid escapes such as `%40` still decode as before. (fixes #695)
+- Search engine plugins now take part in the default `search`. They were only reaching `research`, `agent` and `find_similar`, although `docs/plugins.md` said they join the dispatch pool. They join the general web pool with the same retry and circuit-breaker protection as the built-in engines.
+- `wigolo warmup` component flags now select components: `--embeddings` or `--reranker` alone no longer download the browser engine first, `--browser` is honoured, `warmup --help` prints usage instead of starting a download, and unknown options are rejected. `doctor` (and `init --no-warmup`) read the bundled browser engine version instead of running `npx playwright`, which could download a different release from the registry. First-use install messages now give on-disk sizes. (#672)
+- `search` no longer fails with "mapped is not iterable" when the query contains `constructor`. Lookup tables keyed by query words or page-supplied values (code-block language, JSON-LD `@type`, `og:type`) no longer match built-in object members such as `constructor` or `__proto__`. (fixes #683)
+
 ## v0.3.1 — 2026-10-24
 
 Re-cut of v0.3.0 so the release ships its single-file binaries.

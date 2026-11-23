@@ -21,6 +21,11 @@ export interface Config {
   fetchTimeoutMs: number;
   fetchMaxRetries: number;
   maxRedirects: number;
+  /** Largest response body (bytes) the HTTP and TLS fetch tiers will buffer
+   * before failing with `response_too_large`. 0 or less disables the cap.
+   * Browser-tier, Reddit API, escape-hatch and redirect-drain reads are not
+   * covered. */
+  maxResponseBytes: number;
   fetchAllowPrivate: boolean;
   playwrightLoadTimeoutMs: number;
   playwrightNavTimeoutMs: number;
@@ -152,6 +157,16 @@ export interface Config {
   embeddingMaxTextLength: number;
   /** ORT intra-op threads for the embedder and reranker; 0 = ORT default (host CPU count). */
   onnxThreads: number;
+  /**
+   * Base URL for an OpenAI-compatible embeddings endpoint. When set, the embed
+   * factory sends `POST <base>/embeddings` and skips the on-device model.
+   * `null` keeps the bundled fastembed model.
+   */
+  embeddingApiBase: string | null;
+  /** Optional Bearer token for `embeddingApiBase`. Keychain or env only. */
+  embeddingApiKey: string | null;
+  /** Timeout for one remote embedding request, in milliseconds. */
+  embeddingRequestTimeoutMs: number;
   /**
    * Search backend selector. Resolves `WIGOLO_SEARCH` env > persisted
    * `searchBackend` in config.json > built-in default (null = 'core').
@@ -414,6 +429,25 @@ function envInt(
   const persisted = settings[sk];
   if (typeof persisted === 'number' && !isNaN(persisted)) return persisted;
   return fallback;
+}
+
+/**
+ * Parse a positive-integer env var or setting. A bad value falls back to the
+ * documented default, matching `envInt`, so a typo cannot stop the CLI from
+ * loading. The caller never sees a non-positive value.
+ */
+function envPositiveInt(
+  key: string,
+  fallback: number,
+  settings: Record<string, unknown>,
+  settingsKey?: string,
+): number {
+  const envVal = process.env[key];
+  const raw: unknown = envVal !== undefined ? envVal : settings[settingsKey ?? key];
+  if (raw === undefined || raw === null || raw === '') return fallback;
+
+  const parsed = typeof raw === 'number' ? raw : /^\d+$/.test(String(raw).trim()) ? Number(String(raw).trim()) : NaN;
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
 }
 
 function envFloat(
@@ -753,6 +787,7 @@ export function getConfig(): Config {
     fetchTimeoutMs: envInt('FETCH_TIMEOUT_MS', 10000, settings, 'fetchTimeoutMs'),
     fetchMaxRetries: envInt('FETCH_MAX_RETRIES', 2, settings, 'fetchMaxRetries'),
     maxRedirects: envInt('MAX_REDIRECTS', 5, settings, 'maxRedirects'),
+    maxResponseBytes: envInt('WIGOLO_MAX_RESPONSE_BYTES', 20 * 1024 * 1024, settings, 'maxResponseBytes'),
     fetchAllowPrivate: envBool('WIGOLO_FETCH_ALLOW_PRIVATE', false, settings, 'fetchAllowPrivate'),
     playwrightLoadTimeoutMs: envInt('PLAYWRIGHT_LOAD_TIMEOUT_MS', 15000, settings, 'playwrightLoadTimeoutMs'),
     playwrightNavTimeoutMs: envInt('PLAYWRIGHT_NAV_TIMEOUT_MS', 30000, settings, 'playwrightNavTimeoutMs'),
@@ -860,6 +895,9 @@ export function getConfig(): Config {
     embeddingIdleTimeoutMs: envInt('WIGOLO_EMBEDDING_IDLE_TIMEOUT', 1800000, settings, 'embeddingIdleTimeoutMs'),
     embeddingMaxTextLength: envInt('WIGOLO_EMBEDDING_MAX_TEXT_LENGTH', 8000, settings, 'embeddingMaxTextLength'),
     onnxThreads: envInt('WIGOLO_ONNX_THREADS', 0, settings, 'onnxThreads'),
+    embeddingApiBase: envStr('WIGOLO_EMBEDDING_API_BASE', null, settings, 'embeddingApiBase'),
+    embeddingApiKey: resolveKeychainSecret('WIGOLO_EMBEDDING_API_KEY', 'embeddingApiKey'),
+    embeddingRequestTimeoutMs: envPositiveInt('WIGOLO_EMBEDDING_REQUEST_TIMEOUT_MS', 30_000, settings, 'embeddingRequestTimeoutMs'),
     searchBackend: envStr('WIGOLO_SEARCH', null, settings, 'searchBackend'),
     llmProvider: envStr('WIGOLO_LLM_PROVIDER', null, settings, 'llmProvider'),
     llmBaseUrl: envStr('WIGOLO_LLM_BASE_URL', null, settings, 'llmBaseUrl'),
