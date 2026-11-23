@@ -1,5 +1,6 @@
 import type { SearchEngine, SearchEngineOptions, RawSearchResult } from '../../types.js';
 import { createLogger } from '../../logger.js';
+import { nextUserAgent, isBlockedError } from './user-agents.js';
 
 const log = createLogger('search');
 
@@ -81,6 +82,11 @@ function authorNames(authors: DblpAuthors | undefined): string | undefined {
 
 export class DblpEngine implements SearchEngine {
   name = 'dblp';
+  private userAgent = nextUserAgent();
+
+  onRetry(_attempt: number, lastError: unknown): void {
+    if (isBlockedError(lastError)) this.userAgent = nextUserAgent(this.userAgent);
+  }
 
   async search(query: string, options: SearchEngineOptions = {}): Promise<RawSearchResult[]> {
     const timeoutMs = options.timeoutMs ?? 10000;
@@ -96,9 +102,15 @@ export class DblpEngine implements SearchEngine {
 
     const response = await fetch(url, {
       signal: AbortSignal.timeout(timeoutMs),
-      headers: { Accept: 'application/json' },
+      headers: { Accept: 'application/json', 'User-Agent': this.userAgent },
     });
 
+    // DBLP sits behind Anubis, whose bot challenge is served as HTTP 202 —
+    // a 2xx carrying no JSON. Parsing it as success made the block invisible
+    // (no throw → no retry, no UA rotation, no breaker, no telemetry).
+    // Same bug class and same fix shape as the DDG 202 handling. Message
+    // matches isBlockedError ("blocked") so the wrapper rotates the UA.
+    if (response.status === 202) throw new Error(`DBLP blocked (bot challenge): HTTP 202`);
     if (!response.ok) throw new Error(`DBLP returned ${response.status}`);
 
     const data = (await response.json()) as DblpResponse;
