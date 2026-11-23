@@ -50,6 +50,21 @@ pre-aborted-signal guard is already upstream. Nothing lost from that branch.
 
 After every rebase on upstream: `npx vitest run tests/unit/search/engines/bing-*.test.ts tests/unit/search/core/core-provider-score-floor.test.ts tests/unit/search/core/score-floor*.test.ts tests/unit/search/degraded-recovery.test.ts`
 
+### Wave-1 upstream picks (cherry-picked 2026-11-24 from upstream main @ post-v0.3.1)
+
+| Upstream commit | Change | Conflict surface |
+|---|---|---|
+| `f472544b` | Query words can no longer match `Object.prototype` keys in search/extraction lookup tables (fixes #683) | CHANGELOG only |
+| `1626ea4b` | OpenAI-compatible remote embeddings endpoint: `WIGOLO_EMBEDDING_API_BASE`/`_API_KEY`/`_REQUEST_TIMEOUT_MS` (#674) | `src/config.ts` config-key block: kept both our `onnxThreads` line and the three new keys |
+| `22ac8fed` | Remote-embed follow-up: input trim, positive-int timeout fallback, model-scoped cache search (fixes #674) | CHANGELOG, config helper block, config test — all add/add |
+| `7f6fe10a` | Fetch response-body size cap via `readCapped` + `WIGOLO_MAX_RESPONSE_BYTES` | `http-client`/`tls-tier`/`router`: kept BOTH our egress-proxy guards/imports and upstream's cap guards (complementary throws) |
+| `5144ab4b` | Docs scoping for the cap + `readCapped` docblocks | none |
+| `b7822965` (#696) | Proxy credentials with a stray `%` reach the browser as typed (fixes #695) | CHANGELOG only |
+
+Follow-up fix commit `4ccb8392`: the `envInt→envPositiveInt` swap for
+`embeddingRequestTimeoutMs` was lost during 22ac8fed conflict resolution;
+upstream's own test caught it. After future rebases, re-check this line.
+
 Known upstream gaps found while debugging (candidates for issue reports, no PRs):
 1. `research` has no cache-bypass flag (`search` has `--force-refresh`); a
    poisoned local cache re-serves junk into synthesis indefinitely.
