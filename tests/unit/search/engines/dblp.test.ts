@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { DblpEngine } from '../../../../src/search/engines/dblp.js';
+import { isBlockedError } from '../../../../src/search/engines/user-agents.js';
 
 interface FetchCall {
   url: string;
@@ -228,5 +229,48 @@ describe('DblpEngine', () => {
     expect(calls[0].url).toContain('q=graph+neural');
     expect(calls[0].url).toContain('format=json');
     expect(calls[0].url).toContain('h=15');
+  });
+
+  // Same bug class as the DDG 202 incident (2026-11-23): DBLP sits behind
+  // Anubis, which serves HTTP 202 challenge pages. 202 is 2xx — the old code
+  // passed !response.ok, JSON-parsed the challenge HTML and threw a raw
+  // SyntaxError upstream (or found 0 hits), so the block was invisible to
+  // retry/UA-rotation/breaker machinery and to the operator.
+  it('throws on 202 bot challenge instead of parsing it as a response', async () => {
+    // Falsifier: a results-shaped body on a 202 must STILL throw — status
+    // decides, not parse success.
+    captureFetch(dblpBody([{ title: 'X', url: 'https://dblp.org/rec/x' }]), true, 202);
+    await expect(new DblpEngine().search('q')).rejects.toThrow(/202/);
+  });
+
+  it('202 error matches isBlockedError so the wrapper rotates UA on retry', async () => {
+    captureFetch(dblpBody([]), true, 202);
+    const err = await new DblpEngine().search('q').catch((e) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(isBlockedError(err)).toBe(true);
+  });
+
+  it('onRetry after a 202 rotates the User-Agent', async () => {
+    const uas: string[] = [];
+    vi.spyOn(global, 'fetch').mockImplementation(async (_input, init) => {
+      uas.push(String((init?.headers as Record<string, string>)?.['User-Agent'] ?? ''));
+      return { ok: true, status: 202, json: async () => ({}), text: async () => '' } as Response;
+    });
+    const engine = new DblpEngine();
+    const err = await engine.search('q').catch((e) => e);
+    expect(err).toBeInstanceOf(Error);
+    engine.onRetry(1, err);
+    await engine.search('q').catch(() => undefined);
+    expect(uas).toHaveLength(2);
+    expect(uas[0]).not.toBe('');
+    expect(uas[1]).not.toBe(uas[0]);
+  });
+
+  it('sends a User-Agent on normal requests too', async () => {
+    const { calls } = captureFetch(dblpBody([]));
+    await new DblpEngine().search('q');
+    const ua = (calls[0].init?.headers as Record<string, string> | undefined)?.['User-Agent'];
+    expect(typeof ua).toBe('string');
+    expect(ua && ua.length > 0).toBe(true);
   });
 });
