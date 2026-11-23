@@ -24,6 +24,22 @@ import {
   getNewsEngines,
   _resetNewsEnginesForTest,
 } from '../../../src/search/core/verticals/news.js';
+import {
+  getCodeEngines,
+  _resetCodeEnginesForTest,
+} from '../../../src/search/core/verticals/code.js';
+import {
+  getImageEngines,
+  _resetImageEnginesForTest,
+} from '../../../src/search/core/verticals/images.js';
+import {
+  getDocsEngines,
+  _resetDocsEnginesForTest,
+} from '../../../src/search/core/verticals/docs.js';
+import {
+  getPapersEngines,
+  _resetPapersEnginesForTest,
+} from '../../../src/search/core/verticals/papers.js';
 import type { EngineEntry } from '../../../src/search/core/engine-base.js';
 
 const ENV_DISABLE = 'WIGOLO_DISABLE_ENGINES';
@@ -165,6 +181,10 @@ function resetAll(): void {
   resetConfig();
   _resetGeneralEnginesForTest();
   _resetNewsEnginesForTest();
+  _resetCodeEnginesForTest();
+  _resetImageEnginesForTest();
+  _resetDocsEnginesForTest();
+  _resetPapersEnginesForTest();
 }
 
 /**
@@ -590,17 +610,25 @@ describe('WIGOLO_DISABLE_ENGINES (QS-4)', () => {
     expect([...disabledSet()]).toEqual([]);
   });
 
-  it('(f) SEARCH_ENGINE_NAMES equals the live union of both rosters', () => {
+  it('(f) SEARCH_ENGINE_NAMES equals the live union of all six rosters', () => {
     process.env.BRAVE_API_KEY = 'test-key-not-a-real-credential';
+    process.env.WIGOLO_GITHUB_TOKEN = 'test-token-not-a-real-credential';
     process.env.WIGOLO_RSS_FEEDS = 'https://example.com/feed.xml';
     resetAll();
 
     const live = [
-      ...new Set([...rosterNames(getGeneralEngines()), ...rosterNames(getNewsEngines())]),
+      ...new Set([
+        ...rosterNames(getGeneralEngines()),
+        ...rosterNames(getNewsEngines()),
+        ...rosterNames(getCodeEngines()),
+        ...rosterNames(getImageEngines()),
+        ...rosterNames(getDocsEngines()),
+        ...rosterNames(getPapersEngines()),
+      ]),
     ];
     expect(
       [...live].sort(),
-      'the disable allow-list must equal the union of both verticals\' roster names',
+      'the disable allow-list must equal the union of all six verticals\' roster names',
     ).toEqual([...SEARCH_ENGINE_NAMES].sort());
   });
 });

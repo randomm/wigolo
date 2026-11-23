@@ -6,7 +6,7 @@ import { DuckDuckGoEngine } from '../../engines/duckduckgo.js';
 import { BraveEngine } from '../../engines/brave.js';
 import { CratesIoEngine } from '../../engines/crates-io.js';
 import { wrapWithRetryAndBreaker, type EngineEntry } from '../engine-base.js';
-import { getConfig } from '../../../config.js';
+import { getConfig, filterDisabledEngines } from '../../../config.js';
 
 // Code-focused vertical. GitHub-code (when a token is configured) +
 // StackOverflow are the canonical code-intent engines; DuckDuckGo + DevDocs + Brave (when configured) add
@@ -83,7 +83,7 @@ export function getCodeEngines(): EngineEntry[] {
     quality: 'high',
   });
 
-  cached = entries;
+  cached = filterDisabledEngines(entries, 'code');
   return cached;
 }
 
