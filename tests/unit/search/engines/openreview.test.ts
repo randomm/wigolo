@@ -145,10 +145,13 @@ describe('OpenReviewEngine', () => {
     expect(calls[0].init?.signal).toBeInstanceOf(AbortSignal);
   });
 
-  it('encodes query and limit from the query and maxResults', async () => {
+  it('sends the search term via the `term` parameter (api2 rejects legacy `query` with 400)', async () => {
     const { calls } = captureFetch(orBody([]));
     await new OpenReviewEngine().search('graph neural', { maxResults: 15 });
-    expect(calls[0].url).toContain('query=graph+neural');
+    expect(calls[0].url).toMatch(/[?&]term=graph\+neural/);
+    // api2.openreview.net ValidationError: "query" is no longer accepted —
+    // pin its absence so a revert of the param rename fails loudly.
+    expect(calls[0].url).not.toMatch(/[?&]query=/);
     expect(calls[0].url).toContain('limit=15');
   });
 });
