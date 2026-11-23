@@ -54,6 +54,19 @@ describe('getEnginePolicy', () => {
     return policy.optional_engines.find((e) => e.name === name)?.active;
   }
 
+  // The policy view reads the MEMOIZED vertical rosters (that is the whole
+  // point — it mirrors what would actually dispatch). So an env change only
+  // takes effect after both the config AND the vertical roster caches are
+  // dropped, exactly like the production cold-start path and the
+  // engine-health tests' reset pattern.
+  function reconfigure(): void {
+    resetConfig();
+    _resetGeneralEnginesForTest();
+    _resetImageEnginesForTest();
+    _resetCodeEnginesForTest();
+    _resetNewsEnginesForTest();
+  }
+
   it('fail-safe: everything unset still yields the full sensible shape', () => {
     const policy = getEnginePolicy();
     expect(Array.isArray(policy.disabled)).toBe(true);
@@ -69,7 +82,7 @@ describe('getEnginePolicy', () => {
 
   it('reflects the operator disable list (WIGOLO_DISABLE_ENGINES) sorted', () => {
     process.env.WIGOLO_DISABLE_ENGINES = 'ddg-image,brave';
-    resetConfig();
+    reconfigure();
     const policy = getEnginePolicy();
     expect(policy.disabled).toEqual(['brave', 'ddg-image']);
   });
@@ -80,7 +93,7 @@ describe('getEnginePolicy', () => {
     expect(activeOf(before, 'brave-image')).toBe(false);
 
     process.env.BRAVE_API_KEY = 'test-key';
-    resetConfig();
+    reconfigure();
     const after = getEnginePolicy();
     expect(activeOf(after, 'brave')).toBe(true);
     expect(activeOf(after, 'brave-image')).toBe(true);
@@ -92,21 +105,21 @@ describe('getEnginePolicy', () => {
   it('marks github-code active only when WIGOLO_GITHUB_TOKEN is set', () => {
     expect(activeOf(getEnginePolicy(), 'github-code')).toBe(false);
     process.env.WIGOLO_GITHUB_TOKEN = 'test-token';
-    resetConfig();
+    reconfigure();
     expect(activeOf(getEnginePolicy(), 'github-code')).toBe(true);
   });
 
   it('marks rss-feed active when feeds are configured (env feeds)', () => {
     expect(activeOf(getEnginePolicy(), 'rss-feed')).toBe(false);
     process.env.WIGOLO_RSS_FEEDS = 'https://feeds.example.com/news.xml';
-    resetConfig();
+    reconfigure();
     expect(activeOf(getEnginePolicy(), 'rss-feed')).toBe(true);
   });
 
   it('an optional engine configured BUT operator-disabled is not active', () => {
     process.env.BRAVE_API_KEY = 'test-key';
     process.env.WIGOLO_DISABLE_ENGINES = 'brave';
-    resetConfig();
+    reconfigure();
     const policy = getEnginePolicy();
     expect(policy.disabled).toContain('brave');
     expect(activeOf(policy, 'brave')).toBe(false);
@@ -118,7 +131,7 @@ describe('getEnginePolicy', () => {
   it('never leaks secret values — the view carries names and booleans only', () => {
     process.env.BRAVE_API_KEY = 'SECRET-BRAVE-VALUE';
     process.env.WIGOLO_GITHUB_TOKEN = 'SECRET-GH-VALUE';
-    resetConfig();
+    reconfigure();
     const policy = getEnginePolicy();
     const serialized = JSON.stringify(policy);
     expect(serialized).not.toMatch(/SECRET-BRAVE-VALUE/);
