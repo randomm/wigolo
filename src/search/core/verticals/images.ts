@@ -1,7 +1,7 @@
 import { DdgImageEngine } from '../../engines/ddg-image.js';
 import { BraveImageEngine } from '../../engines/brave-image.js';
 import { wrapWithRetryAndBreaker, type EngineEntry } from '../engine-base.js';
-import { getConfig } from '../../../config.js';
+import { getConfig, filterDisabledEngines } from '../../../config.js';
 
 // Images vertical for the core backend. Previously `category: 'images'`
 // returned `unsupported_category` on
@@ -28,7 +28,7 @@ export function getImageEngines(): EngineEntry[] {
     entries.push({ engine: wrapWithRetryAndBreaker(new BraveImageEngine()), weight: 1.2, supportsDateFilter: false });
   }
 
-  cached = entries;
+  cached = filterDisabledEngines(entries, 'images');
   return cached;
 }
 

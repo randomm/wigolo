@@ -604,12 +604,13 @@ export function redditApiConfigured(cfg: Config = getConfig()): boolean {
 }
 
 /**
- * Engine names an operator may name in the disable list — the engines the two
- * verticals this list filters can put into their pool
- * (`src/search/core/verticals/general.ts`, `.../verticals/news.ts`), matched
- * on each engine class's registered `name` (no aliases). `brave` and `rss-feed`
- * join their roster only when configured (API key / feeds) but are disable-able
- * when they do. Exported so the test suite can pin it against the live rosters.
+ * Engine names an operator may name in the disable list — the engines the six
+ * vertical roster builders can put into their pools
+ * (`src/search/core/verticals/`: general, news, code, images, docs, papers),
+ * matched on each engine class's registered `name` (no aliases). Key-gated
+ * engines (`brave`, `brave-image`, `rss-feed`, `github-code`) join their roster
+ * only when configured (API key / token / feeds) but are disable-able when they
+ * do. Exported so the test suite can pin it against the live rosters.
  */
 export const SEARCH_ENGINE_NAMES: readonly string[] = [
   'bing',
@@ -622,6 +623,18 @@ export const SEARCH_ENGINE_NAMES: readonly string[] = [
   'lobsters',
   'bing_news',
   'rss-feed',
+  'github-code',
+  'stackoverflow',
+  'devdocs',
+  'mdn',
+  'crates-io',
+  'ddg-image',
+  'brave-image',
+  'arxiv',
+  'semantic-scholar',
+  'openalex',
+  'dblp',
+  'openreview',
 ];
 
 /**
@@ -690,8 +703,8 @@ function parseDisabledEngines(raw: string | null): Set<string> {
 
 /**
  * Drop the engines the operator opted out of from a freshly built roster
- * (Task 2.1 / QS-4). The two vertical roster builders must call this AT
- * CONSTRUCTION, BEFORE they memoize, so neither roster cache can ever serve a
+ * (Task 2.1 / QS-4). Every vertical roster builder must call this AT
+ * CONSTRUCTION, BEFORE it memoizes, so no roster cache can ever serve a
  * pool the operator disabled.
  *
  * Never zero-engine: an all-disabled roster is left UNfiltered and surfaced as
