@@ -22,10 +22,17 @@ export class ArxivEngine implements SearchEngine {
       max_results: String(maxResults),
       sortBy: 'relevance',
     });
-    const url = `http://export.arxiv.org/api/query?${params}`;
+    // https, not http: this deployment's egress proxy only permits CONNECT to
+    // 443, so a plain-http engine dies in the proxy while looking like a dead
+    // upstream (live papers outage, 2026-11-23). Descriptive UA per arXiv API
+    // etiquette — they ask callers to identify themselves.
+    const url = `https://export.arxiv.org/api/query?${params}`;
     log.debug('arxiv search', { query });
 
-    const response = await fetch(url, { signal: AbortSignal.timeout(timeoutMs) });
+    const response = await fetch(url, {
+      signal: AbortSignal.timeout(timeoutMs),
+      headers: { 'User-Agent': 'wigolo (local-first research agent)' },
+    });
     if (!response.ok) throw new Error(`arXiv returned ${response.status}`);
 
     const xml = await response.text();

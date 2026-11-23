@@ -181,6 +181,8 @@ const TRANSIENT_COOLDOWN_MS = 5_000;
  * instead of tripping its breaker. Generic mechanism — the value is registered
  * against the engine name, not special-cased in the dispatch logic. */
 export const MARGINALIA_MIN_INTERVAL_MS = 2_000;
+/** arXiv API etiquette: ≤1 request / 3 s per client (marginalia precedent). */
+export const ARXIV_MIN_INTERVAL_MS = 3_000;
 
 /** Name-keyed default minimum inter-request intervals. A vertical registers a
  * rate-limit-prone engine here so every wrapped instance picks it up without

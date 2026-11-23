@@ -3,8 +3,13 @@ import { SemanticScholarEngine } from '../../engines/semantic-scholar.js';
 import { OpenAlexEngine } from '../../engines/openalex.js';
 import { DblpEngine } from '../../engines/dblp.js';
 import { OpenReviewEngine } from '../../engines/openreview.js';
-import { wrapWithRetryAndBreaker, type EngineEntry } from '../engine-base.js';
+import { wrapWithRetryAndBreaker, registerEngineMinInterval, ARXIV_MIN_INTERVAL_MS, type EngineEntry } from '../engine-base.js';
 import { filterDisabledEngines } from '../../../config.js';
+
+// arXiv asks API clients to stay at ≤1 request / 3 s; inside the interval the
+// throttle skips the engine (same as-skip semantics as marginalia) instead of
+// queueing, so fan-out deadlines stay clean.
+registerEngineMinInterval('arxiv', ARXIV_MIN_INTERVAL_MS);
 
 // arXiv + Semantic Scholar are the canonical primary sources. OpenAlex, DBLP,
 // and OpenReview broaden coverage (open metadata, CS conference bibliography,
