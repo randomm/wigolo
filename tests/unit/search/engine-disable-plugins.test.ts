@@ -66,6 +66,18 @@ describe('WIGOLO_DISABLE_ENGINES applies to plugin engines in the general roster
     expect(names).toContain('duckduckgo');
   });
 
+  it('matches a mixed-case plugin engine name regardless of operator casing', () => {
+    // The parser lowercases tokens; the consumer must compare case-symmetric,
+    // or a plugin named e.g. 'Acme-Search' silently evades the opt-out.
+    process.env[ENV_DISABLE] = 'acme-search';
+    resetConfig();
+    setPluginSearchEngines([stubEngine('Acme-Search')]);
+    _resetGeneralEnginesForTest();
+
+    const names = getGeneralEngines().map((e) => e.engine.name);
+    expect(names).not.toContain('Acme-Search');
+  });
+
   it('disabling a plugin engine never trips the empty-roster guard', () => {
     // The guard only fires when the WHOLE pool would vanish; plugins are part
     // of the pool now, so disabling one plugin with built-ins left is silent.

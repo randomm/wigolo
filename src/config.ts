@@ -755,7 +755,11 @@ export function filterDisabledEngines<T extends { engine: { name: string } }>(
 ): T[] {
   const disabled = getConfig().searchDisabledEngines;
   if (disabled.size === 0) return entries;
-  const kept = entries.filter((e) => !disabled.has(e.engine.name));
+  // Case-symmetric match: parseDisabledEngines lowercases every token, so the
+  // name side must be lowercased too. Built-in names are already lowercase
+  // (no-op there); plugin-loaded engines may carry mixed case, and an
+  // operator's opt-out must not hinge on matching their exact casing.
+  const kept = entries.filter((e) => !disabled.has(e.engine.name.toLowerCase()));
   if (kept.length === 0) {
     process.stderr.write(
       `[wigolo] error: ${vertical} vertical: WIGOLO_DISABLE_ENGINES / settings.disabledEngines ` +
