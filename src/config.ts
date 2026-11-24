@@ -698,11 +698,14 @@ const MAX_LISTED_UNKNOWN_TOKENS = 10;
 const MAX_UNKNOWN_TOKEN_DISPLAY = 40;
 
 /**
- * Parse one operator disable list (Task 2.1 / QS-4) into lowercased registered
- * engine names. Unknown tokens are dropped and reported in EXACTLY ONE warn
+ * Parse one operator disable list (Task 2.1 / QS-4) into lowercased engine
+ * names. Tokens that are not registered built-in names are KEPT (halo: plugin
+ * engines load after the built-in name registry is fixed, and the operator's
+ * disable list must be able to name them) but reported in EXACTLY ONE warn
  * for the whole list, naming every valid name; each token is JSON.stringify'd
  * and length-capped so interior control chars cannot forge extra `[wigolo]`
- * lines into journald greps.
+ * lines into journald greps. An unknown token can only ever match an engine
+ * whose `name` is exactly that token, so a typo stays inert for built-ins.
  *
  * stderr, not the logger: `createLogger()` calls `getConfig()`, so a logger
  * here would recurse while the config is still being built.
@@ -728,11 +731,12 @@ function parseDisabledEngines(raw: string | null): Set<string> {
       : '';
     process.stderr.write(
       `[wigolo] warn: WIGOLO_DISABLE_ENGINES / settings.disabledEngines: unknown engine name(s) ` +
-      `${listed}${tail} ignored. Valid engine names (general + news verticals): ` +
+      `${listed}${tail} — no built-in matches that name, so they apply only to ` +
+      `plugin-loaded engines. Valid built-in names (general + news verticals): ` +
       `${SEARCH_ENGINE_NAMES.join(', ')}\n`,
     );
   }
-  return new Set(kept);
+  return new Set([...kept, ...unknown]);
 }
 
 /**

@@ -496,7 +496,11 @@ describe('unknown token against the four unfiltered verticals', () => {
       `the warn must list every valid engine name across all six verticals; missing from the message: ${missing.join(', ')}`,
     ).toEqual([]);
 
-    expect(setHasName(disabledSet(), 'nope-engine')).toBe(false);
+    // halo contract change: unknown tokens are KEPT in the set so they can
+    // name plugin-loaded engines (whose names are not in the built-in
+    // registry); inertness for built-ins is guaranteed by exact-name matching
+    // — the byte-equal golden rosters above are that proof, not set emptiness.
+    expect(setHasName(disabledSet(), 'nope-engine')).toBe(true);
   });
 });
 

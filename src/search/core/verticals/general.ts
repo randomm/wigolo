@@ -28,7 +28,10 @@ let cached: EngineEntry[] | null = null;
 export function getGeneralEngines(): EngineEntry[] {
   const builtIn = getBuiltInGeneralEngines();
   const plugins = getPluginEngineEntries();
-  return plugins.length === 0 ? builtIn : [...builtIn, ...plugins];
+  // halo: the operator disable list must mean the same thing for every engine
+  // in the pool — plugin entries join upstream's roster AFTER the built-in
+  // filter ran, so re-filter the merged list (idempotent on the built-ins).
+  return plugins.length === 0 ? builtIn : filterDisabledEngines([...builtIn, ...plugins], 'general');
 }
 
 function getBuiltInGeneralEngines(): EngineEntry[] {
