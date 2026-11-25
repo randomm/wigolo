@@ -3,9 +3,12 @@
 Our fork: `randomm/wigolo` · upstream: `KnockOutEZ/wigolo` · license: AGPL-3.0 (+ commercial dual).
 
 **Upstream is `https://github.com/KnockOutEZ/wigolo` — known by URL only.**
-Deliberately there is NO `upstream` git remote configured: an `upstream` remote
-was removed 2026-11-25 after tooling resolved it as the ticket target and filed
-fork-internal roadmap tickets into upstream's issue tracker. For any upstream
+Deliberately the working clone carries NO `upstream` git remote: an `upstream`
+remote was removed 2026-11-25 after tooling resolved it as the ticket target and
+filed fork-internal roadmap tickets into upstream's issue tracker. (Exception:
+the `wigolo-fork` maintenance tool's own clone under `~/wigolo-fork` keeps a
+fetch-only `upstream` remote by design — that is its sync plumbing, not a
+ticket destination.) For any upstream
 sync, fast-forward or reconciliation, fetch by URL explicitly (below), or add a
 temporary remote named something other than `upstream` and remove it after.
 Note the inherited `README.md` badges/links still name upstream's tracker —
