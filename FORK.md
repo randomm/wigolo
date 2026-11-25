@@ -2,14 +2,33 @@
 
 Our fork: `randomm/wigolo` · upstream: `KnockOutEZ/wigolo` · license: AGPL-3.0 (+ commercial dual).
 
+**Upstream is `https://github.com/KnockOutEZ/wigolo` — known by URL only.**
+Deliberately the working clone carries NO `upstream` git remote: an `upstream`
+remote was removed 2026-11-25 after tooling resolved it as the ticket target and
+filed fork-internal roadmap tickets into upstream's issue tracker. (Exception:
+the `wigolo-fork` maintenance tool's own clone under `~/wigolo-fork` keeps a
+fetch-only `upstream` remote by design — that is its sync plumbing, not a
+ticket destination.) For any upstream
+sync, fast-forward or reconciliation, fetch by URL explicitly (below), or add a
+temporary remote named something other than `upstream` and remove it after.
+Note the inherited `README.md` badges/links still name upstream's tracker —
+that is upstream's document, not our tracker policy.
+
+**Tracker policy: all tickets for this project's work are filed into
+`randomm/wigolo` — never into upstream.** Upstream issues are reserved for
+genuine bug reports we *choose* to hand to the maintainer (posture below), and
+each one is an explicit human decision. When a plan driver or agent files an
+issue, verify the resulting URL lands on `randomm/wigolo` before considering
+the ticket filed.
+
 **Branch model (decided 2026-10-31)**
 
 - `main` — our build: upstream + our commits on top. Everything we run and
   install comes from here.
-- Upstream sync ritual:
+- Upstream sync ritual (by URL — there is no `upstream` remote, see above):
   ```bash
-  git fetch upstream
-  git rebase upstream/main          # replays our commits onto latest upstream
+  git fetch https://github.com/KnockOutEZ/wigolo.git main
+  git rebase FETCH_HEAD             # replays our commits onto latest upstream
   npx vitest run tests/unit/search/engines tests/unit/search/core tests/unit/embedding tests/unit/fetch
   npm run build && npm install -g .
   launchctl kickstart -k gui/$(id -u)/com.trailopeners.wigolo
