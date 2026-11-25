@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Added
+- `WIGOLO_RERANK_API_FORMAT=cohere|tei` selects the remote reranker contract. `tei` speaks Text Embeddings Inference natively: `{query, texts}` in, a bare `[{index, score}]` array out, base URL at the TEI root (no `/v1`). Parsing is case-insensitive; an unknown value uses `cohere`.
+
 ## v0.3.2 — 2026-11-23
 
 Remote embeddings, readiness reporting, warmup component flags, plugin search engines in the default search, and installs on Linux x64 again.
