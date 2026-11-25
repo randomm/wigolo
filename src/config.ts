@@ -136,6 +136,10 @@ export interface Config {
   rerankerModel: string;
   rerankApiBase: string | null;
   rerankApiKey: string | null;
+  /** Wire shape of the remote rerank API. 'cohere' (default): POST
+   * {model,query,documents,top_n} -> {results:[...]}. 'tei': HuggingFace TEI
+   * POST {query,texts} -> bare [{index,score}] array. */
+  rerankApiFormat: 'cohere' | 'tei';
   rerankerMaxLength: number;
   rerankerReadyTimeoutMs: number;
   rerankerRequestTimeoutMs: number;
@@ -855,6 +859,10 @@ export function getConfig(): Config {
     rerankerModel: envStr('WIGOLO_RERANKER_MODEL', 'bge-reranker-v2-m3', settings, 'rerankerModel') ?? 'bge-reranker-v2-m3',
     rerankApiBase: envStr('WIGOLO_RERANK_API_BASE', null, settings, 'rerankApiBase'),
     rerankApiKey: resolveKeychainSecret('WIGOLO_RERANK_API_KEY', 'rerankApiKey'),
+    rerankApiFormat: (() => {
+      const raw = (envStr('WIGOLO_RERANK_API_FORMAT', null, settings, 'rerankApiFormat') ?? 'cohere').toLowerCase();
+      return raw === 'tei' ? 'tei' : 'cohere';
+    })(),
     rerankerMaxLength: envInt('WIGOLO_RERANKER_MAX_LENGTH', 512, settings, 'rerankerMaxLength'),
     rerankerReadyTimeoutMs: envInt('WIGOLO_RERANKER_READY_TIMEOUT_MS', 60_000, settings, 'rerankerReadyTimeoutMs'),
     rerankerRequestTimeoutMs: envInt('WIGOLO_RERANKER_REQUEST_TIMEOUT_MS', 30_000, settings, 'rerankerRequestTimeoutMs'),

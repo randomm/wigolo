@@ -8,6 +8,7 @@ type RemoteResult = { index?: unknown; relevance_score?: unknown; score?: unknow
 export class RemoteRerankProvider implements RerankProvider {
   readonly modelId: string;
   private readonly url: string;
+  private readonly format: 'cohere' | 'tei';
 
   constructor(private readonly config: Config) {
     const base = resolveRemoteBase(config.rerankApiBase, {
@@ -18,6 +19,10 @@ export class RemoteRerankProvider implements RerankProvider {
     });
     this.url = `${base}/rerank`;
     this.modelId = config.rerankerModel;
+    // halo: WIGOLO_RERANK_API_FORMAT — TEI's /rerank takes {query,texts} and
+    // returns a bare [{index,score}] array; the default stays byte-identical
+    // Cohere (POST {model,query,documents,top_n} -> {results:[...]}).
+    this.format = config.rerankApiFormat === 'tei' ? 'tei' : 'cohere';
   }
 
   async rerank(query: string, candidates: RerankCandidate[], topK = candidates.length): Promise<RerankResult[]> {
@@ -33,7 +38,11 @@ export class RemoteRerankProvider implements RerankProvider {
       response = await fetch(this.url, {
         method: 'POST',
         headers,
-        body: JSON.stringify({ model: this.modelId, query, documents: candidates.map((c) => c.text), top_n: topN }),
+        body: JSON.stringify(
+          this.format === 'tei'
+            ? { query, texts: candidates.map((c) => c.text) }
+            : { model: this.modelId, query, documents: candidates.map((c) => c.text), top_n: topN },
+        ),
         signal: AbortSignal.timeout(this.config.rerankerRequestTimeoutMs),
         redirect: 'error',
       });
@@ -53,13 +62,22 @@ export class RemoteRerankProvider implements RerankProvider {
     } catch {
       throw new Error('Remote rerank returned invalid JSON');
     }
-    if (!payload || typeof payload !== 'object' || !('results' in payload) || !Array.isArray(payload.results)) {
-      throw new Error('Remote rerank response must contain a results array');
+    let results: unknown[];
+    if (this.format === 'tei') {
+      // TEI answers with a bare [{index,score}] array and always scores every
+      // document, so there is no top_n to under-deliver against.
+      if (!Array.isArray(payload)) throw new Error('Remote rerank response must be an array');
+      results = payload;
+    } else {
+      if (!payload || typeof payload !== 'object' || !('results' in payload) || !Array.isArray(payload.results)) {
+        throw new Error('Remote rerank response must contain a results array');
+      }
+      // Some servers ignore top_n and score every document, so only too few results is an error.
+      if (payload.results.length < topN) throw new Error('Remote rerank returned fewer results than requested');
+      results = payload.results;
     }
-    // Some servers ignore top_n and score every document, so only too few results is an error.
-    if (payload.results.length < topN) throw new Error('Remote rerank returned fewer results than requested');
     const seen = new Set<number>();
-    const scored = payload.results.map((item: unknown): RerankResult => {
+    const scored = results.map((item: unknown): RerankResult => {
       if (!item || typeof item !== 'object') throw new Error('Remote rerank result must be an object');
       const { index, relevance_score, score } = item as RemoteResult;
       if (!Number.isInteger(index) || (index as number) < 0 || (index as number) >= candidates.length) {
