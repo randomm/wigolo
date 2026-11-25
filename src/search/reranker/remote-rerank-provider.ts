@@ -65,8 +65,12 @@ export class RemoteRerankProvider implements RerankProvider {
     let results: unknown[];
     if (this.format === 'tei') {
       // TEI answers with a bare [{index,score}] array and always scores every
-      // document, so there is no top_n to under-deliver against.
+      // document, so a conformant server never trips the under-delivery guard.
+      // Keep the guard anyway: a short/empty array from a broken response must
+      // fail loudly into the passthrough fallback, not silently drop
+      // unscored documents from the result set (review PR #7, F1).
       if (!Array.isArray(payload)) throw new Error('Remote rerank response must be an array');
+      if (payload.length < topN) throw new Error('Remote rerank returned fewer results than requested');
       results = payload;
     } else {
       if (!payload || typeof payload !== 'object' || !('results' in payload) || !Array.isArray(payload.results)) {

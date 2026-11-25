@@ -868,7 +868,7 @@ export function getConfig(): Config {
     rerankApiBase: envStr('WIGOLO_RERANK_API_BASE', null, settings, 'rerankApiBase'),
     rerankApiKey: resolveKeychainSecret('WIGOLO_RERANK_API_KEY', 'rerankApiKey'),
     rerankApiFormat: (() => {
-      const raw = (envStr('WIGOLO_RERANK_API_FORMAT', null, settings, 'rerankApiFormat') ?? 'cohere').toLowerCase();
+      const raw = (envStr('WIGOLO_RERANK_API_FORMAT', null, settings, 'rerankApiFormat') ?? 'cohere').trim().toLowerCase();
       return raw === 'tei' ? 'tei' : 'cohere';
     })(),
     rerankerMaxLength: envInt('WIGOLO_RERANKER_MAX_LENGTH', 512, settings, 'rerankerMaxLength'),

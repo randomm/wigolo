@@ -157,8 +157,13 @@ describe('RemoteRerankProvider (tei response format)', () => {
     const cases: Array<[string, string]> = [
       ['{invalid', 'invalid JSON'],
       ['{"results":[]}', 'must be an array'],
-      ['[{"index":5,"score":0.1}]', 'out-of-range index'],
+      ['[{"index":5,"score":0.1},{"index":1,"score":0.2}]', 'out-of-range index'],
       ['[{"index":0,"score":"0.1"},{"index":1,"score":0.2}]', 'missing score'],
+      // TEI scores every document, so a short/empty array is a broken
+      // response, not a partial one — same loud failure as the cohere
+      // under-delivery check (review F1: silent result loss was the asymmetry).
+      ['[{"index":0,"score":0.5}]', 'fewer results than requested'],
+      ['[]', 'fewer results than requested'],
     ];
     for (const [body, message] of cases) {
       vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(body, { status: 200 })));
