@@ -30,17 +30,27 @@ function proc(cmdline: string, ppid: number): { cmdline: string; ppid: number } 
 
 const OUR_MARKER = '--user-data-dir=/tmp/wigolo-cdp-direct-abc123';
 
-function fakeSweep(procs: Record<number, { cmdline: string; ppid: number }>, selfPid: number) {
+function fakeSweep(
+  procs: Record<number, { cmdline: string; ppid: number }>,
+  selfPid: number,
+  opts?: { groupKillFails?: boolean; profileDirs?: string[] },
+) {
   const killed: Array<{ pid: number; signal: string }> = [];
+  const removed: string[] = [];
   const deps: OrphanSweepDeps = {
     listPids: () => Object.keys(procs).map(Number),
     readCmdline: (pid) => procs[pid]?.cmdline ?? null,
     readPpid: (pid) => procs[pid]?.ppid ?? null,
     kill: (pid, signal) => {
+      if (pid < 0 && opts?.groupKillFails) throw new Error('ESRCH (no group)');
       killed.push({ pid, signal: String(signal) });
     },
+    listProfileDirs: () => opts?.profileDirs ?? [],
+    removeProfileDir: (name) => {
+      removed.push(name);
+    },
   };
-  return { deps, killed };
+  return { deps, killed, removed };
 }
 
 describe('cdp-direct boot orphan sweep (Task 0.4c)', () => {
@@ -58,10 +68,42 @@ describe('cdp-direct boot orphan sweep (Task 0.4c)', () => {
     );
     const killedPids = sweepOrphanCdpChildren(deps, 100);
     expect(killedPids.sort()).toEqual([201, 202]);
+    // Group-first: the orphan is detached, so its PGID is its own PID and the
+    // negative pid reaches reparented renderer/GPU children too.
     expect(killed).toEqual([
-      { pid: 201, signal: 'SIGKILL' },
-      { pid: 202, signal: 'SIGKILL' },
+      { pid: -201, signal: 'SIGKILL' },
+      { pid: -202, signal: 'SIGKILL' },
     ]);
+  });
+
+  it('falls back to a plain pid kill when the group kill fails', () => {
+    const { deps, killed } = fakeSweep(
+      { 201: proc(`/usr/bin/chrome ${OUR_MARKER}`, 1) },
+      100,
+      { groupKillFails: true },
+    );
+    expect(sweepOrphanCdpChildren(deps, 100)).toEqual([201]);
+    expect(killed).toEqual([{ pid: 201, signal: 'SIGKILL' }]); // fallback on the plain pid
+  });
+
+  it('removes orphaned profile dirs but never one still referenced by a live process', () => {
+    const { deps, removed } = fakeSweep(
+      {
+        201: proc('/usr/bin/chrome --user-data-dir=/tmp/wigolo-cdp-direct-dead', 1),
+        204: proc('/usr/bin/chrome --user-data-dir=/tmp/wigolo-cdp-direct-live --type=renderer', 100),
+      },
+      100,
+      {
+        profileDirs: [
+          'wigolo-cdp-direct-dead',
+          'wigolo-cdp-direct-live',
+          'not-ours',
+          'wigolo-cdp-direct-../escape', // path-traversal attempt must be ignored
+        ],
+      },
+    );
+    sweepOrphanCdpChildren(deps, 100);
+    expect(removed).toEqual(['wigolo-cdp-direct-dead']);
   });
 
   it('skips itself, init, and unreadable /proc entries; never throws', () => {

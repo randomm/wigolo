@@ -275,7 +275,9 @@ interface TypePool {
   browser: Browser | null;
   pool: BrowserContext[];
   activeCount: number;
-  waitQueue: Array<(ctx: BrowserContext) => void>;
+  // halo: scaling Task 0.4 — waiters carry reject so disconnect/shutdown can
+  // fail them instead of parking them forever.
+  waitQueue: Array<{ resolve: (ctx: BrowserContext) => void; reject: (err: Error) => void }>;
   idleTimers: Map<BrowserContext, ReturnType<typeof setTimeout>>;
 }
 
@@ -388,17 +390,23 @@ export class MultiBrowserPool {
       // crash) emits 'disconnected'. Without this the pool caches the corpse
       // forever: every later acquire launches contexts on a dead browser and
       // every fetch fails permanently. Drop the ref so the NEXT launchBrowser()
-      // starts a fresh process, and drain the idle contexts that belonged to
-      // it — they can no longer serve pages. (Contexts still held by in-flight
-      // fetches fail on their own; a late release may return one of those to
-      // the pool, which costs at most one failed fetch before the pool turns
-      // over — acceptable for a crash-recovery path, cheaper than tagging
-      // every context with its browser generation.)
+      // starts a fresh process, drain the idle contexts that belonged to it
+      // (they can no longer serve pages) AND return their activeCount units.
+      // Contexts held by in-flight fetches fail on their own and a late
+      // release may return one to the pool: the pop that hits it fails once on
+      // newPage and the slot is returned there (see the newPage catch), so a
+      // stale context costs one failed fetch and no leaked slot.
       const launched = typePool.browser;
       if (launched && typeof (launched as { on?: unknown }).on === 'function') {
         launched.on('disconnected', () => {
           if (typePool.browser !== launched) return; // a newer browser already replaced it
           typePool.browser = null;
+          // Each idle context holds one activeCount unit (incremented at
+          // acquire, decremented only by the idle-eviction timer). Draining
+          // without decrementing pins activeCount at the cap and DEADLOCKS the
+          // pool — every later acquire parks on waitQueue with nobody left to
+          // release into it.
+          const drained = typePool.pool.length;
           for (const stale of typePool.pool) {
             const timer = typePool.idleTimers.get(stale);
             if (timer) clearTimeout(timer);
@@ -406,6 +414,12 @@ export class MultiBrowserPool {
             stale.close().catch(() => {});
           }
           typePool.pool = [];
+          typePool.activeCount = Math.max(0, typePool.activeCount - drained);
+          // Parked waiters can never be served either: their resolve would
+          // come from a release that will now never happen.
+          for (const waiter of typePool.waitQueue.splice(0)) {
+            waiter.reject(new Error('browser has been disconnected'));
+          }
         });
       }
     }
@@ -459,8 +473,8 @@ export class MultiBrowserPool {
       return browser.newContext({ acceptDownloads: true });
     }
 
-    return new Promise<BrowserContext>((resolve) => {
-      typePool.waitQueue.push(resolve);
+    return new Promise<BrowserContext>((resolve, reject) => {
+      typePool.waitQueue.push({ resolve, reject });
     });
   }
 
@@ -470,8 +484,8 @@ export class MultiBrowserPool {
     const typePool = this.pools.get(type)!;
 
     if (typePool.waitQueue.length > 0) {
-      const resolve = typePool.waitQueue.shift()!;
-      resolve(ctx);
+      const waiter = typePool.waitQueue.shift()!;
+      waiter.resolve(ctx);
       return;
     }
 
@@ -747,6 +761,9 @@ export class MultiBrowserPool {
     let dedicated = false;
     let dedicatedBrowser: Browser | null = null;
     let stealthSlotHeld = false;
+    // True when ctx came from the POOLED acquire (owns one activeCount unit).
+    // The newPage failure path must return that unit for pooled contexts.
+    let pooledAcquired = false;
     // The UA this context authoritatively advertises — recorded alongside a
     // minted clearance so a later reuse can UA-match the consuming tier. Known
     // on the stealth path (resolveStealthUA); the pooled/CDP default is read
@@ -905,6 +922,7 @@ export class MultiBrowserPool {
       resolvedType = this.resolveType(options.browserType, url);
       log.debug('fetching with browser', { url, type: resolvedType });
       ctx = await this.acquireForType(resolvedType);
+      pooledAcquired = true;
     }
 
     // Seed reused anti-bot clearance cookies BEFORE navigation so a solved
@@ -942,6 +960,14 @@ export class MultiBrowserPool {
           this.releaseStealthSlot();
           stealthSlotHeld = false;
         }
+      } else if (pooledAcquired) {
+        // halo: scaling Task 0.4 — the main finally never sees ctx here, so a
+        // pooled context whose newPage fails (e.g. a stale context late-
+        // released after its browser crashed) would leak its activeCount unit
+        // forever. Close it and return the unit, like the idle-eviction timer.
+        const typePool = this.pools.get(resolvedType);
+        if (typePool) typePool.activeCount = Math.max(0, typePool.activeCount - 1);
+        await ctx.close().catch(() => {});
       }
       throw err;
     }
@@ -1765,6 +1791,11 @@ export class MultiBrowserPool {
         typePool.browser = null;
       }
 
+      // halo: scaling Task 0.4(d) — pooled waiters queued behind a full cap
+      // must not outlive teardown; nothing will ever release into their queue.
+      for (const waiter of typePool.waitQueue.splice(0)) {
+        waiter.reject(new Error('browser pool is shutting down'));
+      }
       typePool.activeCount = 0;
       log.debug('browser pool shut down', { type });
     }
