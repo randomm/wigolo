@@ -91,6 +91,7 @@ For fetching pages behind a login with your own browser session: `WIGOLO_CDP_URL
 | `WIGOLO_RERANKER_MODEL` | `bge-reranker-v2-m3` | Model name sent to the remote endpoint; the ONNX model is bundled. |
 | `WIGOLO_RERANK_API_BASE` | unset | Remote service base URL; Wigolo sends `POST <base>/rerank`. Required for `remote`. |
 | `WIGOLO_RERANK_API_KEY` | unset | Optional Bearer token for the remote endpoint. Requires HTTPS unless the endpoint is on loopback (`localhost`, `127.x`, `[::1]`). Read from env or keychain; never persisted in `config.json`. |
+| `WIGOLO_RERANK_API_FORMAT` | `cohere` | Response contract for a remote reranker: `cohere` (default; sends `{model, query, documents, top_n}`, expects `{results:[…]}`) or `tei` (Text Embeddings Inference: sends `{query, texts}`, expects a bare `[{index, score}]` array). Parsed case-insensitively with trimming; an unknown value falls back to `cohere`. |
 | `WIGOLO_RERANKER_REQUEST_TIMEOUT_MS` | `30000` | Remote request timeout in milliseconds. |
 | `WIGOLO_EMBEDDING_MODEL` | `BAAI/bge-small-en-v1.5` | Embedding model for the semantic cache index and `find_similar`. Also the model name sent to a remote endpoint. |
 | `WIGOLO_EMBEDDING_API_BASE` | unset | OpenAI-compatible base URL. Wigolo sends `POST <base>/embeddings`. When unset, the bundled embedding model runs in-process. |
@@ -108,6 +109,8 @@ export WIGOLO_RERANKER_MODEL=bge-reranker-v2-m3
 ```
 
 Wigolo sends `{ "model": "...", "query": "...", "documents": ["..."], "top_n": 2 }` to `/rerank`. The response must contain `results` with at least `top_n` entries shaped `{ "index": 0, "relevance_score": 0.9 }` (or `score`); if the service scores every document, Wigolo keeps the best `top_n`. Indexes refer to the original document order. This is a Cohere-style contract; OpenAI does not define a universal rerank API. Queries and candidate text are sent to the configured endpoint. Remote mode does not download the ONNX model. `warmup` and `doctor` check configuration without contacting the endpoint; the first rerank request verifies service availability. Search falls back to its existing ordering if the endpoint fails.
+
+To point Wigolo at a [Text Embeddings Inference](https://huggingface.co/docs/text-embeddings-inference) reranker instead, set `WIGOLO_RERANK_API_FORMAT=tei`. TEI serves reranking at `/rerank` on its root, so set `WIGOLO_RERANK_API_BASE` to the TEI root URL (e.g. `http://127.0.0.1:8081`) — **not** with a `/v1` suffix as the Cohere-style example above uses. TEI scores every document and ignores any top-n request; Wigolo keeps the best `top_n`. A response that omits any document fails loudly and search falls back to its existing ordering.
 
 ## Remote embeddings
 
