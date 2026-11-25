@@ -123,3 +123,51 @@ describe('RemoteRerankProvider', () => {
     await expect(new RemoteRerankProvider(config()).rerank('q', candidates)).rejects.toThrow('non-finite');
   });
 });
+
+describe('RemoteRerankProvider (tei response format)', () => {
+  const teiConfig = (over: Partial<Config> = {}) => config({ rerankApiFormat: 'tei', ...over });
+
+  it('sends {query,texts} (no model/top_n) and reads the bare-array response', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(
+      JSON.stringify([{ index: 1, score: 0.9 }, { index: 0, score: 0.2 }]), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const result = await new RemoteRerankProvider(teiConfig()).rerank('query', candidates);
+    expect(result).toEqual([{ id: 'second', score: 0.9 }, { id: 'first', score: 0.2 }]);
+    const [url, options] = fetchMock.mock.calls[0];
+    expect(url).toBe('http://127.0.0.1:8082/v1/rerank');
+    expect(JSON.parse(options.body)).toEqual({ query: 'query', texts: ['document one', 'document two'] });
+  });
+
+  it('accepts scores for every document (TEI ignores any top_k) and slices to topK', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(
+      JSON.stringify([{ index: 0, score: 0.1 }, { index: 1, score: 0.9 }]), { status: 200 })));
+    expect(await new RemoteRerankProvider(teiConfig()).rerank('q', candidates, 1))
+      .toEqual([{ id: 'second', score: 0.9 }]);
+  });
+
+  it('sends optional Bearer auth', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(
+      JSON.stringify([{ index: 0, score: 0.5 }, { index: 1, score: 0.4 }]), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    await new RemoteRerankProvider(teiConfig({ rerankApiBase: 'https://rerank.example/v1', rerankApiKey: 'secret' })).rerank('q', candidates);
+    expect(fetchMock.mock.calls[0][1].headers.Authorization).toBe('Bearer secret');
+  });
+
+  it('rejects malformed TEI payloads', async () => {
+    const cases: Array<[string, string]> = [
+      ['{invalid', 'invalid JSON'],
+      ['{"results":[]}', 'must be an array'],
+      ['[{"index":5,"score":0.1},{"index":1,"score":0.2}]', 'out-of-range index'],
+      ['[{"index":0,"score":"0.1"},{"index":1,"score":0.2}]', 'missing score'],
+      // TEI scores every document, so a short/empty array is a broken
+      // response, not a partial one — same loud failure as the cohere
+      // under-delivery check (review F1: silent result loss was the asymmetry).
+      ['[{"index":0,"score":0.5}]', 'fewer results than requested'],
+      ['[]', 'fewer results than requested'],
+    ];
+    for (const [body, message] of cases) {
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(body, { status: 200 })));
+      await expect(new RemoteRerankProvider(teiConfig()).rerank('q', candidates)).rejects.toThrow(message);
+    }
+  });
+});

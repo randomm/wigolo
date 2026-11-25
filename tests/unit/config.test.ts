@@ -311,6 +311,21 @@ describe('config', () => {
         rerankApiKey: 'test-token', rerankerModel: 'test-reranker', rerankerRequestTimeoutMs: 1234,
       });
     });
+    it('parses WIGOLO_RERANK_API_FORMAT case-insensitively, trimmed, defaulting on unknown', () => {
+      delete process.env.WIGOLO_RERANK_API_FORMAT;
+      resetConfig();
+      expect(getConfig().rerankApiFormat).toBe('cohere');
+      process.env.WIGOLO_RERANK_API_FORMAT = 'TEI';
+      resetConfig();
+      expect(getConfig().rerankApiFormat).toBe('tei');
+      process.env.WIGOLO_RERANK_API_FORMAT = ' tei '; // stray spaces from a shell export must not fall back
+      resetConfig();
+      expect(getConfig().rerankApiFormat).toBe('tei');
+      process.env.WIGOLO_RERANK_API_FORMAT = 'tees'; // typo keeps the safe default (repo policy: default wins)
+      resetConfig();
+      expect(getConfig().rerankApiFormat).toBe('cohere');
+      delete process.env.WIGOLO_RERANK_API_FORMAT;
+    });
     it('respects explicit WIGOLO_RERANKER=none to disable reranking', () => {
       process.env.WIGOLO_RERANKER = 'none';
       resetConfig();
