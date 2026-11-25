@@ -1,5 +1,5 @@
 import { spawn as nodeSpawn, type ChildProcess } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { mkdtemp as fsMkdtemp, rm as fsRm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -490,6 +490,127 @@ export function _setProcessKillForTests(fn: GroupKill | undefined): void {
   _testProcessKill = fn;
 }
 
+// ── Boot orphan sweep (halo: scaling Task 0.4c) ────────────────────────────
+// The rung spawns Chrome `detached: true` (own process group) and tears it
+// down in a `finally`. When wigolo ITSELF is SIGKILLed — the OOM killer is the
+// expected regime under container caps — that finally never runs and every
+// group it had spawned survives as an orphan (profile dir + hundreds of MB
+// each) across restarts. The sweep finds processes carrying our unique
+// profile marker whose parent is init (truly reparented — a live rung's child
+// still has its launcher as parent, so concurrent rungs are never touched)
+// and SIGKILLs them. Once per process, on first use of the rung.
+
+/** Injectable seam for the orphan sweep — pure in tests, /proc-backed in prod. */
+export interface OrphanSweepDeps {
+  /** All live PIDs (prod: numeric /proc entries). */
+  listPids: () => number[];
+  /** Process cmdline (NULs → spaces), or null when unreadable/gone. */
+  readCmdline: (pid: number) => string | null;
+  /** Parent PID, or null when unreadable/gone. */
+  readPpid: (pid: number) => number | null;
+  /** Signal one PID (prod: real process.kill). */
+  kill: (pid: number, signal: NodeJS.Signals) => void;
+}
+
+// Matches the mkdtemp prefix at the spawn site below; unique enough to never
+// match a user-owned profile.
+const ORPHAN_MARKER = 'wigolo-cdp-direct-';
+
+export function sweepOrphanCdpChildren(deps: OrphanSweepDeps, selfPid: number): number[] {
+  const killed: number[] = [];
+  let pids: number[];
+  try {
+    pids = deps.listPids();
+  } catch {
+    return killed;
+  }
+  for (const pid of pids) {
+    // pid 1 (init) and our own PID are never candidates.
+    if (!Number.isInteger(pid) || pid <= 1 || pid === selfPid) continue;
+    let cmdline: string | null = null;
+    try {
+      cmdline = deps.readCmdline(pid);
+    } catch {
+      continue;
+    }
+    if (!cmdline || !cmdline.includes('--user-data-dir=') || !cmdline.includes(ORPHAN_MARKER)) continue;
+    let ppid: number | null = null;
+    try {
+      ppid = deps.readPpid(pid);
+    } catch {
+      continue;
+    }
+    // Only truly reparented (ppid == init) processes are orphans. Anything
+    // with a live parent belongs to a running process — never signal it.
+    if (ppid !== 1) continue;
+    try {
+      deps.kill(pid, 'SIGKILL');
+      killed.push(pid);
+    } catch {
+      // Already gone between scan and signal — nothing to do.
+    }
+  }
+  return killed;
+}
+
+function realOrphanSweepDeps(): OrphanSweepDeps {
+  return {
+    listPids: () => {
+      try {
+        return readdirSync('/proc').filter((n) => /^\d+$/.test(n)).map(Number);
+      } catch {
+        return [];
+      }
+    },
+    readCmdline: (pid) => {
+      try {
+        return readFileSync(`/proc/${pid}/cmdline`, 'utf8').replaceAll('\0', ' ');
+      } catch {
+        return null;
+      }
+    },
+    readPpid: (pid) => {
+      try {
+        // comm may contain spaces/parens — split AFTER the last ')'.
+        const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+        const close = stat.lastIndexOf(')');
+        const ppid = Number(stat.slice(close + 2).split(' ')[1]);
+        return Number.isFinite(ppid) ? ppid : null;
+      } catch {
+        return null;
+      }
+    },
+    kill: (pid, signal) => {
+      process.kill(pid, signal);
+    },
+  };
+}
+
+let _testOrphanSweepDeps: OrphanSweepDeps | undefined;
+/** Test-only override for the orphan-sweep deps. `undefined` → real /proc path. */
+export function _setOrphanSweepDepsForTests(deps: OrphanSweepDeps | undefined): void {
+  _testOrphanSweepDeps = deps;
+}
+
+let orphanSweepAttempted = false;
+/** Test-only: re-arm the once-per-process sweep gate. */
+export function _resetOrphanSweepForTests(): void {
+  orphanSweepAttempted = false;
+}
+
+function attemptOrphanSweep(): void {
+  if (orphanSweepAttempted) return;
+  orphanSweepAttempted = true;
+  try {
+    // Under a test runner never touch real processes unless a fake is injected.
+    if (!_testOrphanSweepDeps && process.env.VITEST) return;
+    if (!_testOrphanSweepDeps && !existsSync('/proc')) return; // non-Linux
+    sweepOrphanCdpChildren(_testOrphanSweepDeps ?? realOrphanSweepDeps(), process.pid);
+  } catch {
+    // Hygiene only — a failing sweep must never break the rung.
+  }
+}
+
 // Total-budget default when the caller passes none. Bounded so a stuck launch /
 // challenge never holds the escalation slot; the caller's own signal is the
 // harder ceiling when present.
@@ -896,6 +1017,9 @@ export async function cdpDirectFetch(
   }
 
   const deps = _testFetchDeps ?? realFetchDeps();
+  // halo: scaling Task 0.4c — reap Chrome groups left behind by a previous
+  // process that was SIGKILLed before its teardown finally could run.
+  attemptOrphanSweep();
 
   const chromePath = deps.resolveChrome();
   if (!chromePath) {

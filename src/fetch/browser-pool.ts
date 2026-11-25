@@ -291,7 +291,9 @@ export class MultiBrowserPool {
   // activeCount + waitQueue pattern: a stealth fetch acquires a slot before
   // launching and releases it after close.
   private stealthActive = 0;
-  private readonly stealthWaitQueue: Array<() => void> = [];
+  // halo: scaling Task 0.4(d) — waiters carry a `fail` so shutdown can reject
+  // queued fetches instead of leaving them parked on a promise nobody resolves.
+  private readonly stealthWaitQueue: Array<{ wake: () => void; fail: (err: Error) => void }> = [];
   // Cached outcome of the ONE-per-process authentic-browser probe on the
   // dedicated stealth path (T1-A). 'chrome' means an installed browser launched
   // successfully; 'bundled' means we fell back (or were forced) to the bundled
@@ -382,6 +384,30 @@ export class MultiBrowserPool {
         ...(proxy ? { proxy } : {}),
         ...hardening, // halo: egress-proxy-ssrf
       });
+      // halo: scaling Task 0.4(b) — a browser killed out-of-band (OOM killer,
+      // crash) emits 'disconnected'. Without this the pool caches the corpse
+      // forever: every later acquire launches contexts on a dead browser and
+      // every fetch fails permanently. Drop the ref so the NEXT launchBrowser()
+      // starts a fresh process, and drain the idle contexts that belonged to
+      // it — they can no longer serve pages. (Contexts still held by in-flight
+      // fetches fail on their own; a late release may return one of those to
+      // the pool, which costs at most one failed fetch before the pool turns
+      // over — acceptable for a crash-recovery path, cheaper than tagging
+      // every context with its browser generation.)
+      const launched = typePool.browser;
+      if (launched && typeof (launched as { on?: unknown }).on === 'function') {
+        launched.on('disconnected', () => {
+          if (typePool.browser !== launched) return; // a newer browser already replaced it
+          typePool.browser = null;
+          for (const stale of typePool.pool) {
+            const timer = typePool.idleTimers.get(stale);
+            if (timer) clearTimeout(timer);
+            typePool.idleTimers.delete(stale);
+            stale.close().catch(() => {});
+          }
+          typePool.pool = [];
+        });
+      }
     }
     return typePool.browser;
   }
@@ -477,14 +503,24 @@ export class MultiBrowserPool {
       return Promise.resolve();
     }
     return new Promise<void>((resolve, reject) => {
-      const onAbort = () => {
+      const drop = () => {
         const i = this.stealthWaitQueue.indexOf(waiter);
         if (i !== -1) this.stealthWaitQueue.splice(i, 1);
+        signal?.removeEventListener('abort', onAbort);
+      };
+      const onAbort = () => {
+        drop();
         reject(signal!.reason);
       };
-      const waiter = () => {
-        signal?.removeEventListener('abort', onAbort);
-        resolve();
+      const waiter = {
+        wake: () => {
+          drop();
+          resolve();
+        },
+        fail: (err: Error) => {
+          drop();
+          reject(err);
+        },
       };
       this.stealthWaitQueue.push(waiter);
       signal?.addEventListener('abort', onAbort, { once: true });
@@ -497,7 +533,7 @@ export class MultiBrowserPool {
   private releaseStealthSlot(): void {
     const next = this.stealthWaitQueue.shift();
     if (next) {
-      next();
+      next.wake();
       return;
     }
     this.stealthActive = Math.max(0, this.stealthActive - 1);
@@ -1732,6 +1768,14 @@ export class MultiBrowserPool {
       typePool.activeCount = 0;
       log.debug('browser pool shut down', { type });
     }
+
+    // halo: scaling Task 0.4(d) — stealth waiters queued behind a full
+    // semaphore would sit on a promise no shutdown path ever settles. Fail
+    // them so their fetches reject cleanly instead of hanging past teardown.
+    for (const waiter of this.stealthWaitQueue.splice(0)) {
+      waiter.fail(new Error('browser pool is shutting down'));
+    }
+    this.stealthActive = 0;
   }
 }
 
