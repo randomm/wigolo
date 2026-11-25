@@ -65,6 +65,14 @@ Follow-up fix commit `4ccb8392`: the `envInt→envPositiveInt` swap for
 `embeddingRequestTimeoutMs` was lost during 22ac8fed conflict resolution;
 upstream's own test caught it. After future rebases, re-check this line.
 
+### plugin engines respect the disable list (post-v0.3.2 rebase)
+
+| File | Change | Why | Merge-conflict risk |
+|---|---|---|---|
+| `src/search/core/verticals/general.ts` | `getGeneralEngines()` re-filters the merged built-in+plugin roster through `filterDisabledEngines` | Upstream `cba8623c` appends plugin engines AFTER the built-in filter runs — without this, `WIGOLO_DISABLE_ENGINES` cannot take a plugin engine out of the pool | low — one line, commented `// halo:` |
+| `src/config.ts` (`parseDisabledEngines`) | Unknown tokens are KEPT in `searchDisabledEngines` (warn reworded: "apply only to plugin-loaded engines") instead of dropped | Plugin engine names are not in the built-in `SEARCH_ENGINE_NAMES` registry; an unknown token can only match an engine whose `name` equals it, so typos stay inert | low — one predicate + message; contract pin in `engine-disable-verticals.test.ts` (d) updated to match |
+| `tests/unit/search/engine-disable-plugins.test.ts` | New RED→GREEN suite (drop / keep / empty-roster-guard) | Locks the behavior across rebases | none (new file) |
+
 Known upstream gaps found while debugging (candidates for issue reports, no PRs):
 1. `research` has no cache-bypass flag (`search` has `--force-refresh`); a
    poisoned local cache re-serves junk into synthesis indefinitely.

@@ -62,9 +62,13 @@ export class TransformersRerankProvider implements RerankProvider {
   private model: Model | null = null;
   private loadPromise: Promise<{ tokenizer: Tokenizer; model: Model }> | null = null;
   readonly modelId: string;
+  /** Token cap per (query, document) pair, from `rerankerMaxLength`. */
+  private readonly maxLength: number;
 
   constructor() {
     this.modelId = 'Xenova/ms-marco-MiniLM-L-6-v2';
+    // A fractional value from settings would make the tokenizer throw.
+    this.maxLength = Math.floor(Number(getConfig().rerankerMaxLength));
   }
 
   async warmup(): Promise<void> {
@@ -114,11 +118,20 @@ export class TransformersRerankProvider implements RerankProvider {
     for (let start = 0; start < candidates.length; start += RERANK_MAX_BATCH) {
       const batch = candidates.slice(start, start + RERANK_MAX_BATCH);
       // Build batch: query repeated against each document.
-      const inputs = tokenizer(batch.map(() => query), {
+      // Without `max_length` the tokenizer pads to the longest pair and truncates
+      // at the model's own limit (512). With `max_length` it pads every pair to
+      // that length, so the cap is applied only when the longest pair exceeds it.
+      const base = {
         text_pair: batch.map((c) => c.text),
         padding: true,
         truncation: true,
-      });
+      };
+      const batchQueries = batch.map(() => query);
+      let inputs = tokenizer(batchQueries, base);
+      const longest = Number(inputs?.input_ids?.dims?.[1]);
+      if (this.maxLength > 0 && longest > this.maxLength) {
+        inputs = tokenizer(batchQueries, { ...base, max_length: this.maxLength });
+      }
 
       const outputs = (await model(inputs)) as { logits: LogitsTensor };
       const logits = outputs.logits;

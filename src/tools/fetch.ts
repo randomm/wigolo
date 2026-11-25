@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { FetchInput, FetchOutput, CachedContent, StageResult } from '../types.js';
 import { describeFetchError } from '../fetch/error-describe.js';
+import { detectBlockedPage } from '../fetch/blocked-page.js';
 import type { SmartRouter } from '../fetch/router.js';
 import { getExtractProvider } from '../providers/extract-provider.js';
 import { getCachedContent, cacheContent, isCacheUsable } from '../cache/store.js';
@@ -163,6 +164,8 @@ function formatCachedResponse(cached: CachedContent, input: FetchInput): FetchOu
     // cache-only mode, where no live refetch is possible) still warns the caller.
     ...(cached.contentCompleteness ? { content_completeness: cached.contentCompleteness } : {}),
   };
+  const blocked = detectBlockedPage(cached.httpStatus ?? 200, cached.rawHtml);
+  if (blocked) out.blocked = blocked;
   capAuxFields(out, input.max_content_chars);
   return out;
 }
@@ -328,10 +331,23 @@ export async function handleFetch(
       log.warn('change detection failed', { url: raw.finalUrl, error: String(err) });
     }
 
-    try {
-      cacheContent(raw, extraction);
-    } catch (err) {
-      log.warn('failed to cache fetched content', { url: raw.finalUrl, error: String(err) });
+    // A block page that still came back as content (a bot wall served over the
+    // HTTP/TLS tier, a 403 banner) keeps its markdown but is flagged so callers
+    // don't have to text-sniff it.
+    const blocked = detectBlockedPage(raw.statusCode, raw.html, raw.headers, {
+      statusUnknown: raw.statusUnknown,
+    });
+
+    // A flagged fetch is not cached. The cache keeps neither the response
+    // headers nor whether the tier reported a placeholder status, so a replay
+    // could not tell it was a block page again and would serve it unflagged. The
+    // next call fetches fresh instead.
+    if (!blocked) {
+      try {
+        cacheContent(raw, extraction);
+      } catch (err) {
+        log.warn('failed to cache fetched content', { url: raw.finalUrl, error: String(err) });
+      }
     }
 
     try {
@@ -393,6 +409,12 @@ export async function handleFetch(
       // 5xx pages that may extract to a usable HTML body.
       ...(typeof raw.statusCode === 'number' ? { http_status: raw.statusCode } : {}),
       ...(raw.jsRequired ? { js_required: true } : {}),
+      // The router reports a degraded-but-usable capture as a lower-tier body
+      // plus a note (today: the browser engine was still installing, so the
+      // HTTP shell is the best available content). Dropping the note made that
+      // fallback indistinguishable from a normal 200, so the caller trusted a
+      // placeholder body. Surface it verbatim; never synthesize one here.
+      ...(raw.warning ? { warning: raw.warning } : {}),
       // Stable fingerprint of the FULL extracted body — computed on
       // extraction.markdown BEFORE the presentation budget clips the returned
       // `markdown`. Change-detection consumers (watch scheduler, diff) key off
@@ -423,6 +445,7 @@ export async function handleFetch(
       ...(raw.challenge_class !== undefined ? { challenge_class: raw.challenge_class } : {}),
       ...(raw.solve_method !== undefined ? { solve_method: raw.solve_method } : {}),
     };
+    if (blocked) out.blocked = blocked;
 
     capAuxFields(out, input.max_content_chars);
     await attachEvidence(out, input, finalMarkdown);

@@ -11,6 +11,7 @@ import {
   type EngineEntry,
 } from '../engine-base.js';
 import { getConfig, filterDisabledEngines } from '../../../config.js';
+import { getPluginEngineEntries } from '../plugin-engines.js';
 
 // Marginalia rate-limits (429) aggressively under a burst. Spacing its calls
 // at least this far apart keeps it in the pool instead of tripping its breaker;
@@ -25,6 +26,15 @@ registerEngineMinInterval('marginalia', MARGINALIA_MIN_INTERVAL_MS);
 let cached: EngineEntry[] | null = null;
 
 export function getGeneralEngines(): EngineEntry[] {
+  const builtIn = getBuiltInGeneralEngines();
+  const plugins = getPluginEngineEntries();
+  // halo: the operator disable list must mean the same thing for every engine
+  // in the pool — plugin entries join upstream's roster AFTER the built-in
+  // filter ran, so re-filter the merged list (idempotent on the built-ins).
+  return plugins.length === 0 ? builtIn : filterDisabledEngines([...builtIn, ...plugins], 'general');
+}
+
+function getBuiltInGeneralEngines(): EngineEntry[] {
   if (cached) return cached;
 
   const entries: EngineEntry[] = [

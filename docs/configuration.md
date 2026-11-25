@@ -53,7 +53,7 @@ What the backends mean:
 - **`searxng`** — the optional/legacy aggregator sidecar only. Higher long-tail recall on some queries, slower cold start; wigolo manages the sidecar process for you.
 - **`hybrid`** — runs `core` first and falls back to the aggregator (merging results) only when a quality signal fires; the merged response names the signal in `fallback_signal`.
 
-The legacy sidecar has its own knobs when you opt in: `WIGOLO_SEARXNG_URL` (use an external instance; the legacy `SEARXNG_URL` is still accepted as a fallback), `SEARXNG_MODE` (`native` or `docker`), `SEARXNG_PORT` (default `8888`).
+The legacy sidecar has its own knobs when you opt in: `WIGOLO_SEARXNG_URL` (use an external instance; the legacy `SEARXNG_URL` is still accepted as a fallback), `SEARXNG_MODE` (`native` or `docker`; with `docker` the container starts on demand whenever a docker-compatible CLI is on PATH, even if Python is installed — the only option on Windows), `SEARXNG_PORT` (default `8888`).
 
 ## Fetch and browser engine
 
@@ -81,7 +81,7 @@ The legacy sidecar has its own knobs when you opt in: `WIGOLO_SEARXNG_URL` (use 
 
 Reliability framing matters here: these tiers make wigolo read pages the way a real browser does, and it learns per-domain which tier works (inspect with [`wigolo tune`](./cli.md#tune)). When a challenge doesn't clear, the failure is labeled honestly instead of returning junk. Crawling stays polite throughout — robots.txt respected by default, per-domain rate limits, and page budgets sized for research, not bulk harvesting.
 
-For fetching pages behind a login with your own browser session: `WIGOLO_CDP_URL` (attach to a running browser's debug port), `WIGOLO_CHROME_PROFILE_PATH` (use a profile), `WIGOLO_AUTH_STATE_PATH` (a saved storage-state file). Then pass `use_auth: true` on `fetch`/`crawl`. `wigolo auth discover` lists attachable sessions.
+For fetching pages behind a login with your own browser session: `WIGOLO_CDP_URL` (attach to a running browser's debug port), `WIGOLO_CHROME_PROFILE_PATH` (use a profile), `WIGOLO_AUTH_STATE_PATH` (a saved storage-state file). Then pass `use_auth: true` on `fetch`/`crawl`. `wigolo auth discover` lists attachable sessions. A storage-state file is loaded into a fresh context for each fetch; a browser attached over CDP is driven through its existing context, which keeps that browser's own cookies.
 
 ## On-device models
 
@@ -124,6 +124,14 @@ export WIGOLO_EMBEDDING_MODEL=BAAI/bge-small-en-v1.5
 ```
 
 `warmup` sends one short probe request. Cache writes and `find_similar` use the remote endpoint from then on.
+
+### Changing the endpoint or the model
+
+The vector store tags each row with a model id. That id combines the model name with the endpoint host and path. `find_similar` scores only rows that carry the active model id.
+
+A change to `WIGOLO_EMBEDDING_API_BASE` or `WIGOLO_EMBEDDING_MODEL` therefore hides every row from the old provider. `wigolo backfill` selects only URLs with no vector row, so it does not repair them. The CLI has no command that re-embeds one URL. Use the MCP `fetch` tool with `force_refresh: true` instead. A plain fetch returns from cache before the embed step runs.
+
+The model id does not change when the weights behind the same endpoint and model name change. Rows from the old weights stay in the index. To re-embed them, call the MCP `fetch` tool with `force_refresh: true` for each URL. To drop every vector, run `wigolo config --cleanup cache`. That command also deletes the cached pages.
 
 ## LLM providers (optional)
 

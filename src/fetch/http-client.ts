@@ -3,8 +3,8 @@ import { createLogger } from '../logger.js';
 import { anySignal } from '../util/abort.js';
 import { guardFetchUrl, guardResolvedHost } from '../watch/ssrf.js';
 import { createPinnedAgent } from './pinned-dispatcher.js';
-import { egressMode, egressMisconfiguredMessage, egressProxyDispatcher, proxyRefusal } from './egress-proxy.js'; // halo: egress-proxy-ssrf
 import { readCapped } from './read-capped.js';
+import { egressMode, egressMisconfiguredMessage, egressProxyDispatcher, proxyRefusal } from './egress-proxy.js'; // halo: egress-proxy-ssrf
 import type { Agent } from 'undici';
 
 export interface HttpFetchOptions {

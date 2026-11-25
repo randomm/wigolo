@@ -20,7 +20,12 @@ export const MAX_CONCURRENT_REQUESTS = 4;
 
 type RemoteEmbedItem = { index?: unknown; embedding?: unknown };
 
-/** Read a response body, but never buffer more than `maxBytes`. */
+/**
+ * Read a response body as UTF-8 text and stop above `maxBytes`.
+ *
+ * The cap runs before any parse, so an oversized body cannot exhaust memory.
+ * A stream error keeps its own message and does not look like bad JSON.
+ */
 async function readCapped(response: Response, maxBytes: number): Promise<string> {
   const body = response.body;
   if (!body) return '';
@@ -118,11 +123,13 @@ export class RemoteEmbedProvider implements EmbedProvider {
       throw new Error(`Remote embedding HTTP ${response.status}`);
     }
 
+    // Read the body outside the parse try so a stream error keeps its own
+    // message. Only a JSON syntax error becomes 'invalid JSON'.
+    const text = await readCapped(response, MAX_RESPONSE_BYTES);
     let payload: unknown;
     try {
-      payload = JSON.parse(await readCapped(response, MAX_RESPONSE_BYTES));
-    } catch (err) {
-      if (err instanceof Error && err.message.startsWith('Remote embedding response exceeded')) throw err;
+      payload = JSON.parse(text);
+    } catch {
       throw new Error('Remote embedding returned invalid JSON');
     }
     if (!payload || typeof payload !== 'object' || !('data' in payload) || !Array.isArray(payload.data)) {

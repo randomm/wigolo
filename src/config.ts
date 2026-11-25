@@ -702,11 +702,14 @@ const MAX_LISTED_UNKNOWN_TOKENS = 10;
 const MAX_UNKNOWN_TOKEN_DISPLAY = 40;
 
 /**
- * Parse one operator disable list (Task 2.1 / QS-4) into lowercased registered
- * engine names. Unknown tokens are dropped and reported in EXACTLY ONE warn
+ * Parse one operator disable list (Task 2.1 / QS-4) into lowercased engine
+ * names. Tokens that are not registered built-in names are KEPT (halo: plugin
+ * engines load after the built-in name registry is fixed, and the operator's
+ * disable list must be able to name them) but reported in EXACTLY ONE warn
  * for the whole list, naming every valid name; each token is JSON.stringify'd
  * and length-capped so interior control chars cannot forge extra `[wigolo]`
- * lines into journald greps.
+ * lines into journald greps. An unknown token can only ever match an engine
+ * whose `name` is exactly that token, so a typo stays inert for built-ins.
  *
  * stderr, not the logger: `createLogger()` calls `getConfig()`, so a logger
  * here would recurse while the config is still being built.
@@ -732,11 +735,12 @@ function parseDisabledEngines(raw: string | null): Set<string> {
       : '';
     process.stderr.write(
       `[wigolo] warn: WIGOLO_DISABLE_ENGINES / settings.disabledEngines: unknown engine name(s) ` +
-      `${listed}${tail} ignored. Valid engine names (general + news verticals): ` +
+      `${listed}${tail} — no built-in matches that name, so they apply only to ` +
+      `plugin-loaded engines. Valid built-in names (general + news verticals): ` +
       `${SEARCH_ENGINE_NAMES.join(', ')}\n`,
     );
   }
-  return new Set(kept);
+  return new Set([...kept, ...unknown]);
 }
 
 /**
@@ -755,7 +759,11 @@ export function filterDisabledEngines<T extends { engine: { name: string } }>(
 ): T[] {
   const disabled = getConfig().searchDisabledEngines;
   if (disabled.size === 0) return entries;
-  const kept = entries.filter((e) => !disabled.has(e.engine.name));
+  // Case-symmetric match: parseDisabledEngines lowercases every token, so the
+  // name side must be lowercased too. Built-in names are already lowercase
+  // (no-op there); plugin-loaded engines may carry mixed case, and an
+  // operator's opt-out must not hinge on matching their exact casing.
+  const kept = entries.filter((e) => !disabled.has(e.engine.name.toLowerCase()));
   if (kept.length === 0) {
     process.stderr.write(
       `[wigolo] error: ${vertical} vertical: WIGOLO_DISABLE_ENGINES / settings.disabledEngines ` +
@@ -902,10 +910,10 @@ export function getConfig(): Config {
     embeddingModel: envStr('WIGOLO_EMBEDDING_MODEL', 'BAAI/bge-small-en-v1.5', settings, 'embeddingModel') ?? 'BAAI/bge-small-en-v1.5',
     embeddingIdleTimeoutMs: envInt('WIGOLO_EMBEDDING_IDLE_TIMEOUT', 1800000, settings, 'embeddingIdleTimeoutMs'),
     embeddingMaxTextLength: envInt('WIGOLO_EMBEDDING_MAX_TEXT_LENGTH', 8000, settings, 'embeddingMaxTextLength'),
-    onnxThreads: envInt('WIGOLO_ONNX_THREADS', 0, settings, 'onnxThreads'),
     embeddingApiBase: envStr('WIGOLO_EMBEDDING_API_BASE', null, settings, 'embeddingApiBase'),
     embeddingApiKey: resolveKeychainSecret('WIGOLO_EMBEDDING_API_KEY', 'embeddingApiKey'),
     embeddingRequestTimeoutMs: envPositiveInt('WIGOLO_EMBEDDING_REQUEST_TIMEOUT_MS', 30_000, settings, 'embeddingRequestTimeoutMs'),
+    onnxThreads: envInt('WIGOLO_ONNX_THREADS', 0, settings, 'onnxThreads'),
     searchBackend: envStr('WIGOLO_SEARCH', null, settings, 'searchBackend'),
     llmProvider: envStr('WIGOLO_LLM_PROVIDER', null, settings, 'llmProvider'),
     llmBaseUrl: envStr('WIGOLO_LLM_BASE_URL', null, settings, 'llmBaseUrl'),

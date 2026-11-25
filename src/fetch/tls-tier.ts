@@ -18,8 +18,8 @@ import { getConfig } from '../config.js';
 import { createLogger } from '../logger.js';
 import { anySignal } from '../util/abort.js';
 import { guardFetchUrl, guardResolvedHost } from '../watch/ssrf.js';
-import { egressMode, egressMisconfiguredMessage } from './egress-proxy.js'; // halo: egress-proxy-ssrf
 import { readCapped } from './read-capped.js';
+import { egressMode, egressMisconfiguredMessage } from './egress-proxy.js'; // halo: egress-proxy-ssrf
 
 const log = createLogger('fetch');
 
