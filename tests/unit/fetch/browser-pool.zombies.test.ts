@@ -46,22 +46,11 @@ function fireDisconnect() {
   }
 }
 
-// Test-harness-generated "Target closed" rejections: pre-attach a no-op
-// handler so vitest's unhandled-rejection watchdog cannot fire when timing
-// lets a harness rejection settle without its consumer running (the real
-// consumer — the pool's awaited race — attaches its own handler at call time
-// and still sees the rejection; this only declares intent for the watchdog).
-function targetClosed() {
-  const p = Promise.reject(new Error('Target closed: browser has been disconnected'));
-  p.catch(() => {});
-  return p;
-}
-
 function makePage(browser?: FakeBrowser) {
   return {
     goto: vi.fn().mockImplementation((url: string) => {
       // A page on a dead browser fails navigation too (process is gone).
-      if (browser?.dead) return targetClosed();
+      if (browser?.dead) throw new Error('Target closed: browser has been disconnected');
       // gotoHang is read at CALL time so a test can flip it after launching.
       if (state.gotoHang) {
         const hung = new Promise<never>((_resolve, reject) => {
@@ -113,7 +102,7 @@ function makeContext(browser: FakeBrowser) {
     newPage: vi.fn().mockImplementation(() => {
       // A context born from a dead browser cannot serve pages — mirrors
       // Playwright's "Target closed" on a disconnected browser.
-      if (browser.dead) return targetClosed();
+      if (browser.dead) throw new Error('Target closed: browser has been disconnected');
       return Promise.resolve(makePage(browser));
     }),
     cookies: vi.fn().mockResolvedValue([]),
