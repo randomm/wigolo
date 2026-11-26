@@ -154,6 +154,10 @@ export async function initSubsystems(): Promise<Subsystems> {
   // the roster above is a bare SearchEngine[], and filterDisabledEngines
   // only ever guarded the core-vertical {engine:{name}} rosters. Splice in
   // place — searxng bootstrapping below mutates THIS array reference.
+  // Note: the SearxngClient unshifts below deliberately outrank this filter.
+  // searxng is a BACKEND choice (WIGOLO_SEARCH / WIGOLO_SEARXNG_URL), not a
+  // pool engine, and is not a name in SEARCH_ENGINE_NAMES — disabling the
+  // backend means clearing those settings, not listing it here.
   searchEngines.splice(0, searchEngines.length, ...filterDisabledEngineList(searchEngines, 'hybrid'));
 
   let searxngProcess: SearxngProcess | null = null;

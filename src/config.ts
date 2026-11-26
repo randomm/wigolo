@@ -122,7 +122,8 @@ export interface Config {
   /** Task 2.1 (REQ-4) — the operator's engine disable list, lowercased and
    * allow-listed against {@link SEARCH_ENGINE_NAMES}. Parsing/precedence:
    * {@link resolveDisabledEnginesRaw} + {@link parseDisabledEngines}; the
-   * consumer is {@link filterDisabledEngines}. Empty Set when unset. */
+   * consumers are {@link filterDisabledEngines} (vertical rosters) and
+   * {@link filterDisabledEngineList} (bare SearchEngine[] pools). Empty Set when unset. */
   searchDisabledEngines: Set<string>;
   /** GitHub API personal access token. When set, the github-code adapter
    * passes it as a Bearer token so search calls run authenticated. Lifts

@@ -191,6 +191,22 @@ describe('EmbeddingService', () => {
     expect(results).toEqual([]);
   });
 
+  it('findSimilar returns empty for blank query without calling the provider', async () => {
+    // Mirror of the embedAndStore empty-document guard: remote embedders
+    // reject empty inputs (TEI 400), and a blank query has nothing to match.
+    const provider = makeMockProvider();
+    const service = new EmbeddingService(provider);
+    await service.init();
+    await service.embedAndStore('https://x.com', 'Real content');
+    const afterStore = provider.embed.mock.calls.length;
+
+    expect(await service.findSimilar('', 5)).toEqual([]);
+    expect(await service.findSimilar('  \n ', 5)).toEqual([]);
+
+    expect(provider.embed).toHaveBeenCalledTimes(afterStore);
+    expect(logSpy.warn).not.toHaveBeenCalled();
+  });
+
   it('findSimilar returns empty when service unavailable', async () => {
     const service = new EmbeddingService(makeMockProvider());
     service.setAvailable(false);

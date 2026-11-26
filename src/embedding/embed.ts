@@ -273,6 +273,9 @@ export class EmbeddingService {
     topK: number,
     excludeUrls?: Set<string>,
   ): Promise<SimilarResult[]> {
+    // Blank queries would hit the same remote-400 path as empty documents
+    // (TEI: "inputs cannot be empty") and have nothing to match anyway.
+    if (!queryText || queryText.trim().length === 0) return [];
     if (!this.available || !this.store) {
       return [];
     }
