@@ -11,7 +11,7 @@ import { resolveSearchBackend, getBootstrapState } from '../searxng/bootstrap.js
 import { searxngConfigured, searxngBackendAvailable } from '../searxng/enabled.js';
 import { SearxngProcess } from '../searxng/process.js';
 import { BackendStatus } from '../server/backend-status.js';
-import { getConfig } from '../config.js';
+import { getConfig, filterDisabledEngineList } from '../config.js';
 import { createLogger } from '../logger.js';
 import { startShell } from '../repl/shell.js';
 import type { SearchEngine } from '../types.js';
@@ -37,6 +37,8 @@ export async function runShell(args: string[]): Promise<number> {
     new BingEngine(),
     new DuckDuckGoEngine(),
   ];
+  // Operator opt-out applies to the shell pool too (fork issue #26).
+  searchEngines.splice(0, searchEngines.length, ...filterDisabledEngineList(searchEngines, 'cli'));
 
   let searxngProcess: SearxngProcess | null = null;
 

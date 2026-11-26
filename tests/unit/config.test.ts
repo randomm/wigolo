@@ -1,8 +1,8 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { getConfig, resetConfig } from '../../src/config.js';
+import { getConfig, resetConfig, filterDisabledEngineList } from '../../src/config.js';
 import { resetPersistedConfig } from '../../src/persisted-config.js';
 
 describe('config', () => {
@@ -723,6 +723,37 @@ describe('config', () => {
       process.env.WIGOLO_LOCAL_LLM_MODEL = 'qwen2.5:7b-instruct';
       resetConfig();
       expect(getConfig().localLlmModel).toBe('qwen2.5:7b-instruct');
+    });
+  });
+
+  describe('filterDisabledEngineList (plain SearchEngine rosters)', () => {
+    const names = (list: Array<{ name: string }>) => list.map((e) => e.name);
+
+    it('drops disabled engines case-insensitively, keeps the rest', () => {
+      process.env.WIGOLO_DISABLE_ENGINES = 'Bing,MOJEEK';
+      resetConfig();
+      const roster = [{ name: 'bing' }, { name: 'duckduckgo' }, { name: 'mojeek' }, { name: 'MixPanel' }];
+      expect(names(filterDisabledEngineList(roster, 'hybrid'))).toEqual(['duckduckgo', 'MixPanel']);
+    });
+
+    it('is a no-op when nothing is disabled', () => {
+      delete process.env.WIGOLO_DISABLE_ENGINES;
+      resetConfig();
+      const roster = [{ name: 'bing' }, { name: 'duckduckgo' }];
+      expect(filterDisabledEngineList(roster, 'hybrid')).toEqual(roster);
+    });
+
+    it('never produces an empty roster: all-disabled leaves it unchanged with an error', () => {
+      process.env.WIGOLO_DISABLE_ENGINES = 'bing,duckduckgo';
+      resetConfig();
+      const roster = [{ name: 'bing' }, { name: 'duckduckgo' }];
+      const written = vi.spyOn(process.stderr, 'write').mockImplementation(() => true);
+      try {
+        expect(names(filterDisabledEngineList(roster, 'hybrid'))).toEqual(['bing', 'duckduckgo']);
+        expect(written).toHaveBeenCalledWith(expect.stringContaining('would disable every engine'));
+      } finally {
+        written.mockRestore();
+      }
     });
   });
 });

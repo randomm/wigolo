@@ -753,26 +753,44 @@ function parseDisabledEngines(raw: string | null): Set<string> {
  * an error — a pool with no engines returns nothing at all, strictly worse
  * than keeping the engines the operator asked to drop.
  */
-export function filterDisabledEngines<T extends { engine: { name: string } }>(
-  entries: T[],
-  vertical: string,
-): T[] {
+function dropDisabledNames<T>(items: T[], nameOf: (item: T) => string, label: string): T[] {
   const disabled = getConfig().searchDisabledEngines;
-  if (disabled.size === 0) return entries;
+  if (disabled.size === 0) return items;
   // Case-symmetric match: parseDisabledEngines lowercases every token, so the
   // name side must be lowercased too. Built-in names are already lowercase
   // (no-op there); plugin-loaded engines may carry mixed case, and an
   // operator's opt-out must not hinge on matching their exact casing.
-  const kept = entries.filter((e) => !disabled.has(e.engine.name.toLowerCase()));
+  const kept = items.filter((e) => !disabled.has(nameOf(e).toLowerCase()));
   if (kept.length === 0) {
     process.stderr.write(
-      `[wigolo] error: ${vertical} vertical: WIGOLO_DISABLE_ENGINES / settings.disabledEngines ` +
+      `[wigolo] error: ${label}: WIGOLO_DISABLE_ENGINES / settings.disabledEngines ` +
       `would disable every engine in the pool — roster left unchanged. ` +
       `Valid engine names: ${SEARCH_ENGINE_NAMES.join(', ')}\n`,
     );
-    return entries;
+    return items;
   }
   return kept;
+}
+
+export function filterDisabledEngines<T extends { engine: { name: string } }>(
+  entries: T[],
+  vertical: string,
+): T[] {
+  return dropDisabledNames(entries, (e) => e.engine.name, `${vertical} vertical`);
+}
+
+/**
+ * Sibling of {@link filterDisabledEngines} for rosters of plain SearchEngine
+ * objects (name on the item itself). The hybrid server/CLI pools are built
+ * as bare arrays in src/server.ts and src/cli/*, and they bypassed the
+ * operator's WIGOLO_DISABLE_ENGINES opt-out until this existed (fork issue
+ * #26: a disabled bing still scraped on every hybrid query).
+ */
+export function filterDisabledEngineList<T extends { name: string }>(
+  engines: T[],
+  label: string,
+): T[] {
+  return dropDisabledNames(engines, (e) => e.name, label);
 }
 
 let cachedConfig: Config | null = null;
