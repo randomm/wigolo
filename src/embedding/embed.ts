@@ -205,6 +205,14 @@ export class EmbeddingService {
       return;
     }
 
+    // An empty extraction (common for PDFs the extractor cannot parse) has
+    // nothing meaningful to cache, and remote embedders reject it outright
+    // (TEI: 400 "inputs cannot be empty"). Never send, never warn.
+    if (!markdown || markdown.trim().length === 0) {
+      log.debug('embedding skipped: empty document', { url });
+      return;
+    }
+
     // Lazy provider load on first use (hoisted here so fetch/research/search
     // callers get it without a per-call-site change).
     if (!(await this.ensureProviderReady())) {
