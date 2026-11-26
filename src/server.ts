@@ -37,7 +37,7 @@ import { DockerSearxng } from './searxng/docker.js';
 import { BackendStatus } from './server/backend-status.js';
 import { maybeEagerWarmup, warmEngines } from './server/warmup-on-start.js';
 import { getEmbeddingService, resetEmbeddingService } from './embedding/embed.js';
-import { getConfig } from './config.js';
+import { getConfig, filterDisabledEngineList } from './config.js';
 import { createLogger } from './logger.js';
 import {
   WIGOLO_INSTRUCTIONS,
@@ -149,6 +149,16 @@ export async function initSubsystems(): Promise<Subsystems> {
   } catch (err) {
     log.error('plugin loading failed', { error: String(err) });
   }
+
+  // Honor WIGOLO_DISABLE_ENGINES on the hybrid path too (fork issue #26):
+  // the roster above is a bare SearchEngine[], and filterDisabledEngines
+  // only ever guarded the core-vertical {engine:{name}} rosters. Splice in
+  // place — searxng bootstrapping below mutates THIS array reference.
+  // Note: the SearxngClient unshifts below deliberately outrank this filter.
+  // searxng is a BACKEND choice (WIGOLO_SEARCH / WIGOLO_SEARXNG_URL), not a
+  // pool engine, and is not a name in SEARCH_ENGINE_NAMES — disabling the
+  // backend means clearing those settings, not listing it here.
+  searchEngines.splice(0, searchEngines.length, ...filterDisabledEngineList(searchEngines, 'hybrid'));
 
   let searxngProcess: SearxngProcess | null = null;
   let dockerSearxng: DockerSearxng | null = null;

@@ -9,7 +9,7 @@ import { SearxngClient } from '../search/searxng.js';
 import { searxngConfigured } from '../searxng/enabled.js';
 import { initDatabase, closeDatabase } from '../cache/db.js';
 import { BackendStatus } from '../server/backend-status.js';
-import { getConfig } from '../config.js';
+import { getConfig, filterDisabledEngineList } from '../config.js';
 import { createLogger } from '../logger.js';
 import { parseArgs, type ParsedArgs } from '../repl/parser.js';
 import { booleanFlagsFor } from './flag-bridge.js';
@@ -202,7 +202,8 @@ export async function runTool(command: string, rawArgs: string[]): Promise<numbe
   const browserPool = new BrowserPool();
   const router = new SmartRouter(httpClient, browserPool);
   const backendStatus = new BackendStatus();
-  const engines: SearchEngine[] = [new DuckDuckGoEngine(), new BingEngine()];
+  // Operator opt-out applies to the CLI pool too (fork issue #26).
+  const engines: SearchEngine[] = filterDisabledEngineList([new DuckDuckGoEngine(), new BingEngine()], 'cli');
   if (config.searxngUrl) {
     engines.unshift(new SearxngClient(config.searxngUrl));
     backendStatus.markHealthy();

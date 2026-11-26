@@ -205,6 +205,14 @@ export class EmbeddingService {
       return;
     }
 
+    // An empty extraction (common for PDFs the extractor cannot parse) has
+    // nothing meaningful to cache, and remote embedders reject it outright
+    // (TEI: 400 "inputs cannot be empty"). Never send, never warn.
+    if (!markdown || markdown.trim().length === 0) {
+      log.debug('embedding skipped: empty document', { url });
+      return;
+    }
+
     // Lazy provider load on first use (hoisted here so fetch/research/search
     // callers get it without a per-call-site change).
     if (!(await this.ensureProviderReady())) {
@@ -265,6 +273,9 @@ export class EmbeddingService {
     topK: number,
     excludeUrls?: Set<string>,
   ): Promise<SimilarResult[]> {
+    // Blank queries would hit the same remote-400 path as empty documents
+    // (TEI: "inputs cannot be empty") and have nothing to match anyway.
+    if (!queryText || queryText.trim().length === 0) return [];
     if (!this.available || !this.store) {
       return [];
     }
